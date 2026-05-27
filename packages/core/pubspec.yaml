@@ -1,0 +1,13 @@
+name: la10_core
+description: Pure Dart core utilities for La 10 — Result, Failure, env.
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  meta: ^1.12.0
+
+dev_dependencies:
+  test: ^1.25.0
+  very_good_analysis: ^6.0.0

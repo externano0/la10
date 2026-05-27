@@ -1,0 +1,44 @@
+name: la10_mobile
+description: La 10 mobile (Android/iOS) — riders and business owners.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  go_router: ^14.2.0
+  flutter_map: ^7.0.0
+  geolocator: ^13.0.1
+  la10_core:
+    path: ../../packages/core
+  la10_data:
+    path: ../../packages/data
+  la10_geo:
+    path: ../../packages/geo
+  la10_ui:
+    path: ../../packages/ui
+  la10_auth:
+    path: ../../packages/features/auth
+  la10_orders:
+    path: ../../packages/features/orders
+  la10_riders:
+    path: ../../packages/features/riders
+  la10_businesses:
+    path: ../../packages/features/businesses
+  la10_tracking:
+    path: ../../packages/features/tracking
+  la10_dispatch:
+    path: ../../packages/features/dispatch
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  very_good_analysis: ^6.0.0
+
+flutter:
+  uses-material-design: true

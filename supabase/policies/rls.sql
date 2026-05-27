@@ -1,0 +1,3 @@
+-- Mirror of supabase/migrations/010_rls_policies.sql for documentation reference.
+-- DO NOT apply this file as a migration. The migration is the source of truth.
+-- See docs/SECURITY.md for the role matrix.

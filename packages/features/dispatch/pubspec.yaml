@@ -1,0 +1,28 @@
+name: la10_dispatch
+description: dispatch feature module for La 10.
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  go_router: ^14.2.0
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  url_launcher: ^6.3.0
+  web: ^1.1.0
+  la10_auth:
+    path: ../auth
+  la10_core:
+    path: ../../core
+  la10_data:
+    path: ../../data
+  la10_ui:
+    path: ../../ui
+
+dev_dependencies:
+  very_good_analysis: ^6.0.0

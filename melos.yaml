@@ -1,0 +1,40 @@
+name: la10
+
+packages:
+  - apps/*
+  - packages/*
+  - packages/features/*
+
+ide:
+  intellij: false
+
+command:
+  bootstrap:
+    usePubspecOverrides: true
+
+scripts:
+  analyze:
+    description: Static analysis across the workspace
+    run: melos exec -- "dart analyze --fatal-infos"
+
+  format:
+    description: Format all Dart code
+    run: dart format --set-exit-if-changed .
+
+  test:
+    description: Run tests in every package that has tests
+    run: melos exec --dir-exists="test" -- "flutter test --reporter compact"
+
+  gen:
+    description: Run build_runner in every package that uses codegen
+    run: melos exec --depends-on="build_runner" -- "dart run build_runner build --delete-conflicting-outputs"
+
+  watch:
+    description: Watch codegen
+    run: melos exec --depends-on="build_runner" --parallelism=1 -- "dart run build_runner watch --delete-conflicting-outputs"
+
+  clean:
+    description: Remove all build artefacts
+    run: |
+      melos exec -- "flutter clean || true"
+      melos exec -- "rm -rf .dart_tool build || true"

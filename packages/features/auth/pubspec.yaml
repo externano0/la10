@@ -1,0 +1,22 @@
+name: la10_auth
+description: Auth + role gate feature module.
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  go_router: ^14.2.0
+  la10_core:
+    path: ../../core
+  la10_data:
+    path: ../../data
+  la10_ui:
+    path: ../../ui
+
+dev_dependencies:
+  very_good_analysis: ^6.0.0

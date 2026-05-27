@@ -1,0 +1,17 @@
+name: la10_data
+description: Supabase client, realtime service, repositories for La 10.
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  supabase_flutter: ^2.5.6
+  la10_core:
+    path: ../core
+  la10_geo:
+    path: ../geo
+
+dev_dependencies:
+  very_good_analysis: ^6.0.0
+  test: ^1.25.0

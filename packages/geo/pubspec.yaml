@@ -1,0 +1,15 @@
+name: la10_geo
+description: OSM/OSRM clients and distance utilities.
+publish_to: none
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  http: ^1.2.0
+  la10_core:
+    path: ../core
+
+dev_dependencies:
+  test: ^1.25.0
+  very_good_analysis: ^6.0.0
