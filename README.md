@@ -4,7 +4,10 @@
 > pedidos, el sistema asigna riders cercanos automáticamente, el jefe puede intervenir
 > y todos ven el estado del pedido en tiempo real.
 
-**URL de prueba:** https://la10-nine.vercel.app
+**URLs:**
+- 🌐 Web (PWA): https://la10-nine.vercel.app
+- 📱 APK Android (rider): https://github.com/externano0/la10/releases (último release)
+- 💻 Código: https://github.com/externano0/la10
 
 ---
 
@@ -19,8 +22,11 @@
 7. [Base de datos: tablas y por qué cada una](#base-de-datos-tablas-y-por-qué-cada-una)
 8. [Edge functions (lógica que corre en el servidor)](#edge-functions-lógica-que-corre-en-el-servidor)
 9. [Flujo completo de un pedido (paso a paso)](#flujo-completo-de-un-pedido-paso-a-paso)
-10. [Cómo agregar una feature nueva](#cómo-agregar-una-feature-nueva)
-11. [Glosario](#glosario)
+10. [Features clave por rol](#features-clave-por-rol)
+11. [Notificaciones y sonidos](#notificaciones-y-sonidos)
+12. [Cómo agregar una feature nueva](#cómo-agregar-una-feature-nueva)
+13. [Glosario](#glosario)
+14. [Changelog rápido](#changelog-rápido)
 
 ---
 
@@ -183,7 +189,13 @@ a él, no las de otros.
 | `dispatch_offers`         | Una oferta de pedido a un rider con TTL (30s por default).   |
 | `rider_locations`         | Última ubicación conocida de cada rider (lat/lng).           |
 | `rider_location_history`  | Histórico de ubicaciones (para auditoría/optimización).      |
-| `chat_messages`           | Mensajes entre jefe y rider.                                 |
+| `chat_messages`           | Mensajes entre jefe y rider (texto y audio).                 |
+
+**Storage:**
+
+| Bucket            | Para qué                                                              |
+|-------------------|-----------------------------------------------------------------------|
+| `chat-audios`     | Audios del chat (privado, signed URLs). Path `<sender_uid>/<ts>.webm`.|
 
 Los cambios de schema están en `supabase/migrations/`. Cada uno empieza con un
 número y un nombre. **Nunca editamos un archivo de migración ya aplicado** —
@@ -243,6 +255,50 @@ no queremos confiar en lo que mande el cliente.
 
 ---
 
+## Features clave por rol
+
+### Rider (`/r/*`)
+- **`/r/home`** — estado (Disponible/Pausado/Offline), GPS automático con throttle, botón "Probar sirena", chat con dispatch.
+- **`/r/offers`** — lista de ofertas pendientes.
+- **`/r/orders/:id`** — pedido activo: mapa con polyline pickup→dropoff, monto destacado, botones "Ir" (Google Maps), "Llamar", y acción principal "Retiré"→"Entregué".
+- **Popup de oferta full-screen** — aparece automáticamente cuando llega una oferta nueva. Tiene countdown del TTL, mini-mapa, monto y direcciones. No se puede cerrar (Aceptar / Rechazar).
+- **`/r/chat`** — hilo con el jefe (texto + audio).
+
+### Comercio (`/b/*`)
+- **`/b/home`** — grilla de mis negocios + botón "Nuevo".
+- **`/b/businesses/:id`** — header del negocio, lista de pedidos.
+- **`/b/businesses/:id/orders/new`** — form de orden (cliente, direcciones con lat/lng manual por ahora, monto, notas).
+
+### Jefe / super-admin (`/d/*`)
+- **`/d/home`** — contadores por estado + lista realtime de órdenes.
+- **`/d/map`** — mapa en vivo con markers de riders (color por status) y pickups de órdenes activas.
+- **`/d/map/rider/:id`** — abre el mapa centrado en un rider específico.
+- **`/d/riders`** — listado realtime. Cada card tiene 3 botones: Localizar / Llamar / Mensaje.
+- **`/d/orders/:id`** — detalle con timeline + botón "Reasignar manualmente" (muestra todos los riders activos, no sólo `available`).
+- **`/d/chat/:id`** — chat con un rider específico.
+
+---
+
+## Notificaciones y sonidos
+
+Tres canales separados:
+
+| Evento                        | Web                                          | Mobile (APK)                                       |
+|-------------------------------|----------------------------------------------|----------------------------------------------------|
+| **Oferta nueva al rider**     | Sirena sintetizada (4 beeps 880↔1320 Hz)     | Vibración fuerte + ringtone de alarma del sistema  |
+| **Mensaje nuevo al rider**    | Ding-dong suave (sine 1568→1318 Hz)          | Vibración corta + tono de notification             |
+| **Mensaje nuevo al jefe**     | Ding-dong suave                              | (mismo) — el jefe también lo recibe en `/d/home`   |
+
+**Cómo se implementa:**
+- En web: Web Audio API generando los tonos en el momento (`packages/features/*/lib/presentation/*_ringtone_web.dart`).
+- En mobile: `flutter_ringtone_player` para sonidos del sistema + `vibration` para el patrón de vibración.
+- El audio del browser **requiere un gesto del usuario** primero (autoplay policy). El primer tap en cualquier botón "despierta" el audio context.
+
+**Limitación actual:** los sonidos solo suenan si la app está corriendo (foreground o background reciente). Cuando el OS suspende el proceso por falta de uso, no llega nada hasta que la app se vuelva a abrir.
+**Próxima ronda:** Firebase Cloud Messaging (FCM) para push real con app cerrada.
+
+---
+
 ## Cómo agregar una feature nueva
 
 Pongamos que querés agregar "calificación del rider al final del delivery".
@@ -283,6 +339,18 @@ Pongamos que querés agregar "calificación del rider al final del delivery".
 
 ---
 
+## Changelog rápido
+
+Solo cambios estructurales que mueven la app, no cada bugfix. La historia completa está en `git log`.
+
+- **2026-05-27 — APK + CI:** repo en GitHub, GitHub Actions builda `app-release.apk` y lo deja como artifact + release. Web sigue auto-deployando manual a Vercel. Migración 017 (lat/lng denormalizado en `rider_locations` y `orders`), 018 (REPLICA IDENTITY FULL para que realtime mande payload completo en UPDATEs), 019 (`chat_messages`), 020 (`ensure_rider_row` con phone), 021 (audio en chat + bucket `chat-audios`), 022 (RLS del rider para leer la orden mientras tiene oferta pendiente).
+- **2026-05-27 — Mapa + GPS real:** `flutter_map` + tiles OSM. Rider envía heartbeats automáticos vía `geolocator` (throttle por tiempo+distancia). Mapa del jefe (`/d/map`) muestra markers vivos.
+- **2026-05-27 — 3 surfaces por rol:** comercio, jefe, rider con role-aware routing. Antes era todo placeholder.
+- **2026-05-27 — Auth + role bootstrap:** profile + role enum, redirect según rol, signup con selector "Soy rider / Soy comercio".
+- **2026-05-26 — Fase 1 (backend completo):** 16 migraciones iniciales, RLS, 5 edge functions deployadas (dispatch-order, offer-respond, expire-offers, rider-heartbeat, order-status).
+
+---
+
 ## Para vos (Claude / cualquier dev nuevo)
 
 Si llegaste a este archivo es porque querés entender el proyecto sin tener que
@@ -297,3 +365,10 @@ leer todo el código. Te dejo lo que importa de verdad:
 4. **El throttle del heartbeat** (`RiderHeartbeatThrottle`) decide cuándo mandar
    una posición: máximo cada 30s, mínimo cada 10s, mínimo 20m de movimiento.
 5. **Las migraciones son inmutables.** Si te equivocaste, sumá una nueva que arregle.
+6. **Código que pisa Web APIs vive en `*_web.dart`** y se importa con conditional
+   imports (`if (dart.library.js_interop)`). En mobile carga el stub equivalente
+   (`*_stub.dart`). Si tocás una de estas, recordá mantener la otra al día.
+7. **Convención de versión APK:** `gh release create vX.Y.Z dist/app-release.apk`.
+   Cada bump tiene release notes con los cambios visibles al usuario.
+8. **El secret de GitHub Actions se llama `ENV_FILE`** y guarda el `.env` completo.
+   Si rotás claves de Supabase, hay que actualizar ahí también.
