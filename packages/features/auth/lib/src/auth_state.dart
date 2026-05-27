@@ -5,9 +5,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'profile.dart';
 
 /// Stream of the current Supabase session. Null when signed out.
-final authSessionProvider = StreamProvider<Session?>((ref) {
+///
+/// IMPORTANTE: emitimos primero el `currentSession` ya restaurado por
+/// Supabase.initialize, antes de suscribirnos a `onAuthStateChange`. Sin
+/// esto, en cold start el stream queda "loading" hasta el primer auth
+/// event y el router cree que no hay sesión y manda a /login.
+final authSessionProvider = StreamProvider<Session?>((ref) async* {
   final auth = La10Supabase.auth;
-  return auth.onAuthStateChange.map((event) => event.session).distinct(
+  yield auth.currentSession;
+  yield* auth.onAuthStateChange.map((event) => event.session).distinct(
         (a, b) => a?.user.id == b?.user.id,
       );
 });

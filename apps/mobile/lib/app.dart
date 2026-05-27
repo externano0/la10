@@ -26,10 +26,18 @@ bool _allowedPrefix(AppRole role, String loc) {
 
 GoRouter _buildRouter(WidgetRef ref) {
   return GoRouter(
-    initialLocation: '/login',
+    // Arrancamos en /home y dejamos que el redirect resuelva.
+    // Si hay sesión guardada en disco (caso típico en cold start), evita
+    // el flash de /login y manda directo al home del rol correspondiente.
+    initialLocation: '/home',
     refreshListenable: GoRouterRefreshListenable(ref),
     redirect: (context, state) {
-      final session = La10Supabase.auth.currentSession;
+      // Esperamos a que el auth provider emita al menos una vez para no
+      // mandar al usuario a /login antes de que se restaure la sesión.
+      final asyncSession = ref.read(authSessionProvider);
+      if (asyncSession.isLoading) return null;
+      final session = asyncSession.value;
+
       final loc = state.matchedLocation;
       final atAuth = loc == '/login' || loc == '/signup';
 

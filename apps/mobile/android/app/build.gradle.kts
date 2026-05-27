@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.la10.la10_mobile"
-    compileSdk = flutter.compileSdkVersion
+    // flutter_ringtone_player y otras deps recientes piden compileSdk 35+.
+    compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

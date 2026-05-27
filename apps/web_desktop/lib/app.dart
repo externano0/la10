@@ -26,21 +26,21 @@ bool _allowedPrefix(AppRole role, String loc) {
 
 GoRouter _buildRouter(WidgetRef ref) {
   return GoRouter(
-    initialLocation: '/login',
+    initialLocation: '/home',
     refreshListenable: GoRouterRefreshListenable(ref),
     redirect: (context, state) {
-      final session = La10Supabase.auth.currentSession;
+      // Esperar a que la sesión restaurada emita por el stream.
+      final asyncSession = ref.read(authSessionProvider);
+      if (asyncSession.isLoading) return null;
+      final session = asyncSession.value;
+
       final loc = state.matchedLocation;
       final atAuth = loc == '/login' || loc == '/signup';
 
       if (session == null) return atAuth ? null : '/login';
 
       final role = ref.read(currentRoleProvider);
-      if (role == null) {
-        // Profile still loading. Stay where we are unless on /home which is the
-        // legacy fallback — keep the user there briefly until role resolves.
-        return null;
-      }
+      if (role == null) return null;
       if (atAuth || loc == '/home') return _homeForRole(role);
       if (!_allowedPrefix(role, loc)) return _homeForRole(role);
       return null;
