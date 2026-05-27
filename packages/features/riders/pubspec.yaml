@@ -16,6 +16,8 @@ dependencies:
   latlong2: ^0.9.1
   url_launcher: ^6.3.0
   web: ^1.1.0
+  flutter_ringtone_player: ^4.0.0+3
+  vibration: ^2.0.0
   la10_core:
     path: ../../core
   la10_auth:

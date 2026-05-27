@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:la10_auth/la10_auth.dart';
 import 'package:la10_data/la10_data.dart';
 
+import 'boss_chat_alert.dart';
+
 final allOrdersStreamProvider = StreamProvider<List<OrderRow>>((ref) {
   return OrdersRepository.instance.watchAll();
 });
@@ -14,6 +16,10 @@ class DispatchHome extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(allOrdersStreamProvider);
+    return BossChatAlert(child: _buildScaffold(context, ref, async));
+  }
+
+  Widget _buildScaffold(BuildContext context, WidgetRef ref, AsyncValue<List<OrderRow>> async) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Dispatch — La 10'),

@@ -12,9 +12,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:la10_data/la10_data.dart';
+import 'package:latlong2/latlong.dart';
 
 Future<void> showOfferPopup(BuildContext context, Offer offer) async {
   return showDialog<void>(
@@ -70,8 +72,10 @@ class _OfferDialogState extends ConsumerState<_OfferDialog> {
       _busy = true;
       _error = null;
     });
+    // La edge fn espera 'accepted' o 'declined'.
+    final apiValue = response == 'accept' ? 'accepted' : 'declined';
     try {
-      await OffersRepository.instance.respond(widget.offer.id, response);
+      await OffersRepository.instance.respond(widget.offer.id, apiValue);
       if (!mounted) return;
       Navigator.of(context).pop();
       if (response == 'accept') {
@@ -141,6 +145,10 @@ class _OfferDialogState extends ConsumerState<_OfferDialog> {
                   if (o == null) {
                     return const Center(child: Text('No se pudo cargar el pedido'));
                   }
+                  final pickup = (o.pickupLat != null && o.pickupLng != null)
+                      ? LatLng(o.pickupLat!, o.pickupLng!) : null;
+                  final dropoff = (o.dropoffLat != null && o.dropoffLng != null)
+                      ? LatLng(o.dropoffLat!, o.dropoffLng!) : null;
                   return SingleChildScrollView(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Column(
@@ -151,6 +159,16 @@ class _OfferDialogState extends ConsumerState<_OfferDialog> {
                           currency: o.currency ?? 'ARS',
                         ),
                         const SizedBox(height: 12),
+                        if (pickup != null || dropoff != null) ...[
+                          SizedBox(
+                            height: 180,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: _OfferMiniMap(pickup: pickup, dropoff: dropoff),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                         _Row(icon: Icons.store, color: Colors.orange,
                           title: 'Retirar en', body: o.pickupAddress),
                         const SizedBox(height: 8),
@@ -243,6 +261,78 @@ class _MoneyBig extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _OfferMiniMap extends StatelessWidget {
+  const _OfferMiniMap({this.pickup, this.dropoff});
+  final LatLng? pickup;
+  final LatLng? dropoff;
+
+  @override
+  Widget build(BuildContext context) {
+    final center = pickup ?? dropoff ?? const LatLng(-34.6037, -58.3816);
+    return FlutterMap(
+      options: MapOptions(
+        initialCenter: center,
+        initialZoom: 13,
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
+        ),
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.la10.app',
+          maxZoom: 19,
+        ),
+        if (pickup != null && dropoff != null)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: [pickup!, dropoff!],
+                color: Colors.indigo,
+                strokeWidth: 4,
+              ),
+            ],
+          ),
+        MarkerLayer(
+          markers: [
+            if (pickup != null)
+              Marker(
+                point: pickup!,
+                width: 36,
+                height: 36,
+                child: const _MapPin(color: Colors.orange, icon: Icons.store),
+              ),
+            if (dropoff != null)
+              Marker(
+                point: dropoff!,
+                width: 36,
+                height: 36,
+                child: const _MapPin(color: Colors.green, icon: Icons.home),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _MapPin extends StatelessWidget {
+  const _MapPin({required this.color, required this.icon});
+  final Color color;
+  final IconData icon;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+      ),
+      child: Icon(icon, color: Colors.white, size: 18),
     );
   }
 }

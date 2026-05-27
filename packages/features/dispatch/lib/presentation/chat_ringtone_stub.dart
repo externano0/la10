@@ -1,6 +1,4 @@
-/// Implementación mobile del aviso de mensaje nuevo.
-/// Más suave que la sirena de oferta: vibración corta + tono notification.
-
+/// Mobile: tono notification + vibración corta.
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:vibration/vibration.dart';
 
@@ -9,12 +7,8 @@ void warmUp() {}
 Future<void> play() async {
   try {
     final hasVibrator = (await Vibration.hasVibrator()) ?? false;
-    if (hasVibrator) {
-      // 300ms vibración suave para diferenciar de una oferta.
-      await Vibration.vibrate(duration: 300);
-    }
+    if (hasVibrator) await Vibration.vibrate(duration: 300);
   } catch (_) {}
-
   try {
     FlutterRingtonePlayer().play(
       android: AndroidSounds.notification,
