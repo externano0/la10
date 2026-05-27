@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:la10_data/la10_data.dart';
 
@@ -29,6 +30,30 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
     _lat.dispose();
     _lng.dispose();
     super.dispose();
+  }
+
+  Future<void> _useCurrentLocation() async {
+    setState(() => _busy = true);
+    try {
+      final svc = await Geolocator.isLocationServiceEnabled();
+      if (!svc) throw StateError('Activá la ubicación del dispositivo.');
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        throw StateError('Permiso de ubicación denegado.');
+      }
+      final pos = await Geolocator.getCurrentPosition();
+      setState(() {
+        _lat.text = pos.latitude.toStringAsFixed(6);
+        _lng.text = pos.longitude.toStringAsFixed(6);
+      });
+    } catch (e) {
+      setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _save() async {
@@ -80,11 +105,41 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
                     keyboardType: TextInputType.phone,
                   ),
                   const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _address,
-                    decoration: const InputDecoration(labelText: 'Dirección (opcional)'),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, size: 20),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Esta es la dirección de retiro. Se usa automáticamente para todos los pedidos del comercio.',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _address,
+                    decoration: const InputDecoration(
+                      labelText: 'Dirección',
+                      hintText: 'Av. Corrientes 1234, CABA',
+                    ),
+                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _useCurrentLocation,
+                    icon: const Icon(Icons.my_location),
+                    label: const Text('Usar mi ubicación actual (GPS)'),
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(

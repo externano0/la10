@@ -10,6 +10,19 @@ Future<void> main() async {
   // y mostramos pantalla de error en vez de quedar pegados en el splash.
   try {
     await La10Supabase.init();
+    // Refrescar el token si hay sesión guardada. Sin esto, en cold start con
+    // token vencido las queries quedan colgadas y el usuario tiene que
+    // re-loguearse. Si el refresh falla (sesión muy vieja, no hay red, etc.)
+    // seguimos igual y el router mandará al login si corresponde.
+    if (La10Supabase.auth.currentSession != null) {
+      try {
+        await La10Supabase.auth.refreshSession()
+            .timeout(const Duration(seconds: 6));
+      } catch (_) {
+        // Sesión inválida o sin red — limpiamos para forzar login limpio.
+        await La10Supabase.auth.signOut().catchError((_) {});
+      }
+    }
     runApp(const ProviderScope(child: La10MobileApp()));
   } catch (e, st) {
     runApp(_BootErrorApp(error: '$e', stack: '$st'));

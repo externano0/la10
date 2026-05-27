@@ -13,21 +13,15 @@ class Business {
   });
 
   factory Business.fromJson(Map<String, dynamic> j) {
-    final loc = j['location'] as String?;
-    double? lat;
-    double? lng;
-    if (loc != null) {
-      // PostGIS may return GeoJSON or hex EWKB; the REST API converts geography
-      // to GeoJSON-ish only if requested. We accept null and re-fetch via RPC
-      // when we need precise coords. For dashboard display address is enough.
-    }
+    // Migration 023 agrega columnas lat/lng denormalizadas mantenidas por trigger
+    // — leemos de ahí en vez de parsear el WKB de PostGIS.
     return Business(
       id: j['id'] as String,
       name: j['name'] as String,
       phone: j['phone'] as String?,
       address: j['address'] as String?,
-      lat: lat,
-      lng: lng,
+      lat: (j['lat'] as num?)?.toDouble(),
+      lng: (j['lng'] as num?)?.toDouble(),
       ownerId: j['owner_id'] as String,
       isActive: (j['is_active'] as bool?) ?? true,
     );

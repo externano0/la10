@@ -43,15 +43,40 @@ class HomeScreen extends ConsumerWidget {
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: asyncProfile.when(
-              loading: () => const Column(
+              loading: () => Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Cargando perfil…'),
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  const Text('Cargando perfil…'),
+                  const SizedBox(height: 24),
+                  // Botón de escape si el fetch se cuelga (token vencido, RLS, etc.)
+                  TextButton(
+                    onPressed: () => ref.invalidate(currentProfileProvider),
+                    child: const Text('Reintentar'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      await AuthActions.instance.signOut();
+                      if (context.mounted) context.go('/login');
+                    },
+                    child: const Text('Cerrar sesión'),
+                  ),
                 ],
               ),
-              error: (e, _) => Text('Error: $e'),
+              error: (e, _) => Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                  const SizedBox(height: 12),
+                  Text('Error: $e'),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: () => ref.invalidate(currentProfileProvider),
+                    child: const Text('Reintentar'),
+                  ),
+                ],
+              ),
               data: (p) {
                 if (p == null) {
                   return Column(
@@ -62,6 +87,14 @@ class HomeScreen extends ConsumerWidget {
                       Text(user?.email ?? '—'),
                       const SizedBox(height: 8),
                       const Text('Tu perfil no está creado todavía. Cerrá sesión y volvé a entrar.'),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: () async {
+                          await AuthActions.instance.signOut();
+                          if (context.mounted) context.go('/login');
+                        },
+                        child: const Text('Cerrar sesión'),
+                      ),
                     ],
                   );
                 }
