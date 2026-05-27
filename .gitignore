@@ -66,3 +66,7 @@ Thumbs.db
 
 # Claude Code local config (per-developer)
 .claude/settings.local.json
+
+# APKs descargados localmente (los release los publica GitHub)
+dist/
+*.apk

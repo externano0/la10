@@ -38,7 +38,15 @@ jobs:
           flutter-version: '3.44.0'
 
       - name: Reconstruir .env desde secret
-        run: echo "${{ secrets.ENV_FILE }}" > "$GITHUB_WORKSPACE/.env"
+        env:
+          # Pasar como env preserva newlines, comillas y caracteres especiales.
+          # `printf '%s'` sin newline final evita ensuciar la última línea.
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          printf '%s' "$ENV_FILE" > "$GITHUB_WORKSPACE/.env"
+          echo "--- .env keys cargadas ---"
+          grep -E '^[A-Z_]+=' "$GITHUB_WORKSPACE/.env" | cut -d= -f1
+          echo "--- fin .env keys ---"
 
       - name: Instalar melos
         run: dart pub global activate melos
