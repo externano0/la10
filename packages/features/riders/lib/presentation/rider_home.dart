@@ -4,9 +4,16 @@ import 'package:go_router/go_router.dart';
 import 'package:la10_auth/la10_auth.dart';
 import 'package:la10_data/la10_data.dart';
 
+import 'fcm_service.dart';
 import 'offer_alert_guard.dart';
 import 'offer_ringtone.dart';
 import 'rider_gps_tracker.dart';
+
+/// Provider que registra el token FCM una vez, después del login del rider.
+/// Idempotente: si ya está registrado, hace upsert sin efecto.
+final _fcmRegisteredProvider = FutureProvider<void>((ref) async {
+  await registerFcmToken();
+});
 
 final myRiderProvider = FutureProvider<Rider?>((ref) async {
   return RidersRepository.instance.me();
@@ -18,6 +25,9 @@ class RiderHome extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(myRiderProvider);
+    // Dispara el registro del token FCM la primera vez que se renderiza
+    // el home del rider. Si falla (sin red, sin permisos) no rompe la UI.
+    ref.watch(_fcmRegisteredProvider);
     return OfferAlertGuard(
       child: _buildScaffold(context, ref, me),
     );

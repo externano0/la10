@@ -55,6 +55,20 @@ Deno.serve(async (req: Request) => {
 
     await sb.from('orders').update({ status: 'offered' }).eq('id', order_id);
 
+    // Disparamos push notification al rider para que suene aunque tenga el celu
+    // bloqueado o la app cerrada. Es fire-and-forget — si falla el push, la
+    // oferta sigue viva y el rider la verá cuando vuelva a abrir la app.
+    try {
+      await sb.functions.invoke('send-push', {
+        body: {
+          user_id: chosenRiderId,
+          title: '¡Nuevo pedido!',
+          body: 'Tenés una oferta esperando.',
+          data: { type: 'offer', offer_id: offer!.id, order_id },
+        },
+      });
+    } catch (_) { /* no rompe el flow del dispatch */ }
+
     return json({ offered_rider_id: chosenRiderId, offer_id: offer!.id, expires_at, manual: !!overrideRider });
   } catch (e) {
     return json({ error: { code: 'INTERNAL', message: String((e as Error)?.message ?? e) } }, 500);

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:la10_data/la10_data.dart';
+import 'package:la10_riders/la10_riders.dart';
 
 import 'app.dart';
 
@@ -10,6 +11,11 @@ Future<void> main() async {
   // y mostramos pantalla de error en vez de quedar pegados en el splash.
   try {
     await La10Supabase.init();
+    // Inicializa Firebase y el handler de background ANTES del runApp.
+    // Necesario para que FCM despierte la app con el celu bloqueado.
+    try {
+      await initFcm();
+    } catch (_) {/* sin Firebase la app sigue funcionando, solo sin push */}
     // Refrescar el token si hay sesión guardada. Sin esto, en cold start con
     // token vencido las queries quedan colgadas y el usuario tiene que
     // re-loguearse. Si el refresh falla (sesión muy vieja, no hay red, etc.)
