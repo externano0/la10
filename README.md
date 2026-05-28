@@ -190,6 +190,7 @@ a él, no las de otros.
 | `rider_locations`         | Última ubicación conocida de cada rider (lat/lng).           |
 | `rider_location_history`  | Histórico de ubicaciones (para auditoría/optimización).      |
 | `chat_messages`           | Mensajes entre jefe y rider (texto y audio).                 |
+| `fcm_tokens`              | Token FCM por (usuario, plataforma) para enviar push notifications. |
 
 **Storage:**
 
@@ -210,11 +211,12 @@ no queremos confiar en lo que mande el cliente.
 
 | Función           | Qué hace                                                                 |
 |-------------------|--------------------------------------------------------------------------|
-| `dispatch-order`  | Toma un pedido y le hace una oferta al rider más cercano (o uno manual). |
+| `dispatch-order`  | Toma un pedido y le hace una oferta al rider más cercano (o uno manual). Dispara `send-push` para alertar al rider. |
 | `offer-respond`   | El rider acepta/rechaza una oferta. Avanza el pedido si acepta.          |
 | `expire-offers`   | Marca ofertas vencidas como `expired` (corre en cron cada minuto).       |
 | `rider-heartbeat` | El rider manda su lat/lng. Se guarda en `rider_locations`.               |
 | `order-status`    | Transiciones de estado del pedido con validación (no podés saltar pasos).|
+| `send-push`       | Manda push notification FCM a un user (firma JWT con service account de Firebase). |
 
 **Por qué edge fns y no SQL directo desde el cliente:**
 - Validan el estado anterior (no podés pasar de `draft` a `delivered`).
@@ -266,16 +268,22 @@ no queremos confiar en lo que mande el cliente.
 
 ### Comercio (`/b/*`)
 - **`/b/home`** — grilla de mis negocios + botón "Nuevo".
+- **`/b/businesses/new`** — registro del negocio con **map picker** (tap en mapa, sin lat/lng manual). La ubicación se guarda como pickup default de TODAS las órdenes del comercio.
 - **`/b/businesses/:id`** — header del negocio, lista de pedidos.
-- **`/b/businesses/:id/orders/new`** — form de orden (cliente, direcciones con lat/lng manual por ahora, monto, notas).
+- **`/b/businesses/:id/orders/new`** — form de orden: pickup auto-cargado del comercio, dropoff con **map picker** (tap en mapa), cliente, monto, notas.
 
 ### Jefe / super-admin (`/d/*`)
 - **`/d/home`** — contadores por estado + lista realtime de órdenes.
 - **`/d/map`** — mapa en vivo con markers de riders (color por status) y pickups de órdenes activas.
 - **`/d/map/rider/:id`** — abre el mapa centrado en un rider específico.
 - **`/d/riders`** — listado realtime. Cada card tiene 3 botones: Localizar / Llamar / Mensaje.
-- **`/d/orders/:id`** — detalle con timeline + botón "Reasignar manualmente" (muestra todos los riders activos, no sólo `available`).
+- **`/d/orders/:id`** — detalle con **mapa de tracking en vivo del rider asignado** (marker que se mueve realtime + polyline OSRM hacia el siguiente waypoint), timeline + botón "Reasignar manualmente" (muestra todos los riders activos, no sólo `available`).
 - **`/d/chat/:id`** — chat con un rider específico.
+
+### Mapas y navegación
+- **Visualización in-app** → `flutter_map` + tiles de OpenStreetMap (gratis, sin API key).
+- **Rutas reales** → cliente `OsrmClient` consulta `https://router.project-osrm.org` y devuelve la polyline siguiendo calles. Si OSRM no responde, fallback a línea recta.
+- **Navegación turn-by-turn** → delegada a Google Maps externa via `tel:`/`https://google.com/maps` (botón "Ir" en `/r/orders/:id`).
 
 ---
 
@@ -294,8 +302,22 @@ Tres canales separados:
 - En mobile: `flutter_ringtone_player` para sonidos del sistema + `vibration` para el patrón de vibración.
 - El audio del browser **requiere un gesto del usuario** primero (autoplay policy). El primer tap en cualquier botón "despierta" el audio context.
 
-**Limitación actual:** los sonidos solo suenan si la app está corriendo (foreground o background reciente). Cuando el OS suspende el proceso por falta de uso, no llega nada hasta que la app se vuelva a abrir.
-**Próxima ronda:** Firebase Cloud Messaging (FCM) para push real con app cerrada.
+### Push notifications (celu bloqueado / app cerrada) — FCM
+
+Para que el rider reciba la oferta con el celu en el bolsillo, usamos **Firebase Cloud Messaging**.
+
+**Flujo:**
+1. Rider abre la app → `initFcm()` inicializa Firebase + registra un background handler top-level.
+2. Rider entra a `/r/home` → `registerFcmToken()` pide permiso de notificaciones, obtiene el token del device y lo upsertea en `fcm_tokens`.
+3. Comercio crea orden → `dispatch-order` elige rider → invoca `send-push` con `user_id`.
+4. `send-push` firma un JWT RS256 con la service account de Firebase, lo cambia por un access token OAuth, y manda POST a `https://fcm.googleapis.com/v1/projects/<proj>/messages:send`.
+5. FCM despierta el celu (incluso bloqueado o con la app killeada) y muestra la notif heads-up con sonido.
+
+**Setup operacional (una vez):**
+- `apps/mobile/android/app/google-services.json` — descargado de Firebase Console y committeado al repo (no tiene secretos críticos, solo IDs públicos).
+- Secret `FIREBASE_SERVICE_ACCOUNT_JSON` en Supabase → Edge Functions → Secrets — JSON completo del service account (Firebase → Project settings → Service accounts → Generate new private key). **Este SÍ es secreto.**
+
+**Limitación:** FCM no garantiza entrega en celus con modos de ahorro agresivo (Xiaomi MIUI, Huawei). En esos casos hay que pedirle al usuario que excluya la app de optimización de batería.
 
 ---
 
@@ -343,6 +365,9 @@ Pongamos que querés agregar "calificación del rider al final del delivery".
 
 Solo cambios estructurales que mueven la app, no cada bugfix. La historia completa está en `git log`.
 
+- **2026-05-27 — FCM push notifications:** tabla `fcm_tokens` + edge fn `send-push` (firma JWT RS256, llama FCM HTTP v1). `dispatch-order` dispara push al rider con cada oferta. Servicio Flutter `fcm_service` con conditional imports (stub web / impl mobile). Compatible con celu bloqueado o app cerrada. Requiere setup de Firebase (ver sección "Push notifications"). Migración 024.
+- **2026-05-27 — Map picker + dirección del comercio:** comercio se registra marcando el local en un mapa (sin pedir lat/lng). El pickup queda fijo y se autocompleta en cada orden. Form de orden usa también map picker para el dropoff. OSRM client para rutas reales (no líneas rectas) en rider activo y en `/d/orders/:id` (tracking en vivo del rider con polyline al siguiente waypoint). Migración 023 (lat/lng denormalizado en businesses).
+- **2026-05-27 — Persistencia de sesión + comercio default address:** refresh del token con timeout 6s al arrancar la app; signOut limpio si falla. `HomeScreen` con botones Reintentar / Cerrar sesión si profile no carga. compileSdk Android forzado a 36 (vía `subprojects { afterEvaluate }`) para que las deps modernas compilen.
 - **2026-05-27 — APK + CI:** repo en GitHub, GitHub Actions builda `app-release.apk` y lo deja como artifact + release. Web sigue auto-deployando manual a Vercel. Migración 017 (lat/lng denormalizado en `rider_locations` y `orders`), 018 (REPLICA IDENTITY FULL para que realtime mande payload completo en UPDATEs), 019 (`chat_messages`), 020 (`ensure_rider_row` con phone), 021 (audio en chat + bucket `chat-audios`), 022 (RLS del rider para leer la orden mientras tiene oferta pendiente).
 - **2026-05-27 — Mapa + GPS real:** `flutter_map` + tiles OSM. Rider envía heartbeats automáticos vía `geolocator` (throttle por tiempo+distancia). Mapa del jefe (`/d/map`) muestra markers vivos.
 - **2026-05-27 — 3 surfaces por rol:** comercio, jefe, rider con role-aware routing. Antes era todo placeholder.
