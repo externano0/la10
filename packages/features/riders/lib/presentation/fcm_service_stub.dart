@@ -2,5 +2,7 @@
 /// En web ya tenemos realtime + ringtone vía Web Audio. Si quisiéramos push
 /// real en web, habría que setup VAPID + service worker — out of scope.
 
+void setFcmNavigator(void Function(String path) navigate) {}
+
 Future<void> initFcm() async {}
 Future<void> registerFcmToken() async {}

@@ -113,7 +113,16 @@ class _RiderGpsTrackerState extends ConsumerState<RiderGpsTracker> {
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      // Errores típicos: red caída momentánea (`SocketException`/`Failed host lookup`).
+      // No bloqueamos el tracking — el próximo position dispara un retry
+      // automático y si funciona el `_error` se limpia. Mostramos un mensaje
+      // corto para no llenar la pantalla con el stack trace de Dart.
+      if (!mounted) return;
+      final friendly = e.toString().contains('SocketException') ||
+              e.toString().contains('Failed host lookup')
+          ? 'Sin internet — reintentando…'
+          : '$e';
+      setState(() => _error = friendly);
     }
   }
 

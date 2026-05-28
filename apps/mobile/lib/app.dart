@@ -26,14 +26,9 @@ bool _allowedPrefix(AppRole role, String loc) {
 
 GoRouter _buildRouter(WidgetRef ref) {
   return GoRouter(
-    // Arrancamos en /home y dejamos que el redirect resuelva.
-    // Si hay sesión guardada en disco (caso típico en cold start), evita
-    // el flash de /login y manda directo al home del rol correspondiente.
     initialLocation: '/home',
     refreshListenable: GoRouterRefreshListenable(ref),
     redirect: (context, state) {
-      // Esperamos a que el auth provider emita al menos una vez para no
-      // mandar al usuario a /login antes de que se restaure la sesión.
       final asyncSession = ref.read(authSessionProvider);
       if (asyncSession.isLoading) return null;
       final session = asyncSession.value;
@@ -68,18 +63,35 @@ class GoRouterRefreshListenable extends ChangeNotifier {
   final WidgetRef _ref;
 }
 
-class La10MobileApp extends ConsumerWidget {
+/// Convertida a Stateful para poder construir el router una sola vez y
+/// registrar el callback de navegación de FCM (cuando el rider toca la
+/// notificación, queremos ir a /r/offers donde el guard levanta el popup).
+class La10MobileApp extends ConsumerStatefulWidget {
   const La10MobileApp({super.key});
+  @override
+  ConsumerState<La10MobileApp> createState() => _La10MobileAppState();
+}
+
+class _La10MobileAppState extends ConsumerState<La10MobileApp> {
+  late final GoRouter _router;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final router = _buildRouter(ref);
+  void initState() {
+    super.initState();
+    _router = _buildRouter(ref);
+    // Le decimos al servicio FCM cómo navegar. Sin esto, al tocar la
+    // notificación no pasaba nada visible.
+    setFcmNavigator((path) => _router.go(path));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'La 10',
       theme: la10LightTheme(),
       darkTheme: la10DarkTheme(),
       themeMode: ThemeMode.system,
-      routerConfig: router,
+      routerConfig: _router,
     );
   }
 }
