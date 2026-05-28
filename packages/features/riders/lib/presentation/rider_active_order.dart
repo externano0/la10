@@ -6,13 +6,33 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:la10_core/la10_core.dart';
 import 'package:la10_data/la10_data.dart';
+import 'package:la10_geo/la10_geo.dart' as geo;
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 final activeOrderProvider =
     FutureProvider.family<OrderRow?, String>((ref, id) async {
   return OrdersRepository.instance.getById(id);
+});
+
+/// Cliente OSRM compartido para resolver rutas reales (no líneas rectas).
+final _osrmClientProvider = Provider<geo.OsrmClient>((_) {
+  return geo.OsrmClient(baseUrl: Env.osrmBaseUrl);
+});
+
+/// Pide a OSRM la ruta entre dos puntos. Si falla devuelve null y caemos
+/// a la línea recta (fallback gráfico).
+final orderRouteProvider =
+    FutureProvider.family<List<LatLng>?, ({LatLng from, LatLng to})>((ref, p) async {
+  final client = ref.read(_osrmClientProvider);
+  final route = await client.route(
+    geo.LatLng(p.from.latitude, p.from.longitude),
+    geo.LatLng(p.to.latitude, p.to.longitude),
+  );
+  if (route == null) return null;
+  return route.geometry.map((g) => LatLng(g.lat, g.lng)).toList();
 });
 
 class RiderActiveOrder extends ConsumerWidget {
@@ -149,14 +169,20 @@ class _OrderView extends StatelessWidget {
   }
 }
 
-class _MiniMap extends StatelessWidget {
+class _MiniMap extends ConsumerWidget {
   const _MiniMap({this.pickup, this.dropoff});
   final LatLng? pickup;
   final LatLng? dropoff;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final center = pickup ?? dropoff ?? const LatLng(-34.6037, -58.3816);
+    // Resolvemos la ruta real solo si tenemos ambos extremos.
+    final routeAsync = (pickup != null && dropoff != null)
+        ? ref.watch(orderRouteProvider((from: pickup!, to: dropoff!)))
+        : null;
+    final routePoints = routeAsync?.asData?.value;
+
     return FlutterMap(
       options: MapOptions(
         initialCenter: center,
@@ -175,7 +201,8 @@ class _MiniMap extends StatelessWidget {
           PolylineLayer(
             polylines: [
               Polyline(
-                points: [pickup!, dropoff!],
+                // Si OSRM respondió → ruta real. Si no, fallback línea recta.
+                points: routePoints ?? [pickup!, dropoff!],
                 color: Colors.indigo,
                 strokeWidth: 4,
               ),

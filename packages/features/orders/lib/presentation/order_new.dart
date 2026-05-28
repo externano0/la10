@@ -8,7 +8,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:la10_businesses/la10_businesses.dart';
 import 'package:la10_data/la10_data.dart';
+import 'package:latlong2/latlong.dart';
 
 final _businessProvider = FutureProvider.family<Business?, String>((ref, id) async {
   return BusinessesRepository.instance.getById(id);
@@ -29,8 +31,7 @@ class _OrderNewState extends ConsumerState<OrderNew> {
   final _pickupLat = TextEditingController();
   final _pickupLng = TextEditingController();
   final _dropoffAddr = TextEditingController();
-  final _dropoffLat = TextEditingController(text: '-34.610');
-  final _dropoffLng = TextEditingController(text: '-58.400');
+  LatLng? _dropoffPoint;
   final _amount = TextEditingController();
   final _notes = TextEditingController();
   bool _busy = false;
@@ -41,7 +42,7 @@ class _OrderNewState extends ConsumerState<OrderNew> {
   @override
   void dispose() {
     for (final c in [_customer, _phone, _pickupAddr, _pickupLat, _pickupLng,
-        _dropoffAddr, _dropoffLat, _dropoffLng, _amount, _notes]) {
+        _dropoffAddr, _amount, _notes]) {
       c.dispose();
     }
     super.dispose();
@@ -55,8 +56,17 @@ class _OrderNewState extends ConsumerState<OrderNew> {
     _pickupLng.text = b.lng?.toStringAsFixed(6) ?? '';
   }
 
+  Future<void> _pickDropoff() async {
+    final result = await pickLocationOnMap(context, initial: _dropoffPoint);
+    if (result != null && mounted) setState(() => _dropoffPoint = result);
+  }
+
   Future<void> _save({required bool submitNow}) async {
     if (!_form.currentState!.validate()) return;
+    if (_dropoffPoint == null) {
+      setState(() => _error = 'Marcá la dirección de entrega en el mapa.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -70,8 +80,8 @@ class _OrderNewState extends ConsumerState<OrderNew> {
         pickupLat: double.parse(_pickupLat.text),
         pickupLng: double.parse(_pickupLng.text),
         dropoffAddress: _dropoffAddr.text.trim(),
-        dropoffLat: double.parse(_dropoffLat.text),
-        dropoffLng: double.parse(_dropoffLng.text),
+        dropoffLat: _dropoffPoint!.latitude,
+        dropoffLng: _dropoffPoint!.longitude,
         totalAmountCents: _amount.text.isEmpty ? null : (double.parse(_amount.text) * 100).round(),
         notes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
       );
@@ -140,12 +150,40 @@ class _OrderNewState extends ConsumerState<OrderNew> {
                         ),
                         validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
                       ),
-                      Row(
-                        children: [
-                          Expanded(child: _NumField(controller: _dropoffLat, label: 'Lat')),
-                          const SizedBox(width: 12),
-                          Expanded(child: _NumField(controller: _dropoffLng, label: 'Lng')),
-                        ],
+                      const SizedBox(height: 8),
+                      // Reemplazamos los inputs Lat/Lng por un picker en mapa.
+                      Card(
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    _dropoffPoint == null ? Icons.location_off : Icons.location_on,
+                                    color: _dropoffPoint == null ? Theme.of(context).colorScheme.outline : Colors.green,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      _dropoffPoint == null
+                                          ? 'Sin punto en el mapa todavía'
+                                          : 'Punto marcado ✓',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              FilledButton.icon(
+                                onPressed: _busy ? null : _pickDropoff,
+                                icon: const Icon(Icons.map),
+                                label: Text(_dropoffPoint == null ? 'Marcar en el mapa' : 'Cambiar punto'),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                       const SizedBox(height: 16),
                       TextFormField(

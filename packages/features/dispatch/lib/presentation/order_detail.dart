@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:la10_data/la10_data.dart';
 
+import 'order_tracking_map.dart';
+
 final orderByIdProvider = FutureProvider.family<OrderRow?, String>((ref, id) async {
   return OrdersRepository.instance.getById(id);
 });
@@ -38,6 +40,15 @@ class OrderDetail extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Mapa con rider en vivo + ruta al siguiente waypoint.
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    height: 280,
+                    child: OrderTrackingMap(order: o),
+                  ),
+                ),
+                const SizedBox(height: 12),
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),

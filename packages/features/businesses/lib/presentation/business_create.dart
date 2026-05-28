@@ -1,10 +1,16 @@
+/// Formulario para registrar un comercio nuevo.
+/// El comercio carga su dirección UNA sola vez y queda como pickup default
+/// de todas sus órdenes. Para marcar en el mapa abre [MapPickerScreen] —
+/// no se piden números crudos de lat/lng al usuario.
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:la10_data/la10_data.dart';
+import 'package:latlong2/latlong.dart';
 
 import 'businesses_home.dart';
+import 'map_picker.dart';
 
 class BusinessCreate extends ConsumerStatefulWidget {
   const BusinessCreate({super.key});
@@ -17,8 +23,7 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
   final _name = TextEditingController();
   final _phone = TextEditingController();
   final _address = TextEditingController();
-  final _lat = TextEditingController(text: '-34.603');
-  final _lng = TextEditingController(text: '-58.387');
+  LatLng? _pickedLocation;
   bool _busy = false;
   String? _error;
 
@@ -27,37 +32,22 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
     _name.dispose();
     _phone.dispose();
     _address.dispose();
-    _lat.dispose();
-    _lng.dispose();
     super.dispose();
   }
 
-  Future<void> _useCurrentLocation() async {
-    setState(() => _busy = true);
-    try {
-      final svc = await Geolocator.isLocationServiceEnabled();
-      if (!svc) throw StateError('Activá la ubicación del dispositivo.');
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-        throw StateError('Permiso de ubicación denegado.');
-      }
-      final pos = await Geolocator.getCurrentPosition();
-      setState(() {
-        _lat.text = pos.latitude.toStringAsFixed(6);
-        _lng.text = pos.longitude.toStringAsFixed(6);
-      });
-    } catch (e) {
-      setState(() => _error = '$e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
+  Future<void> _openPicker() async {
+    final result = await pickLocationOnMap(context, initial: _pickedLocation);
+    if (result != null && mounted) {
+      setState(() => _pickedLocation = result);
     }
   }
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
+    if (_pickedLocation == null) {
+      setState(() => _error = 'Marcá tu local en el mapa.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -66,9 +56,9 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
       await BusinessesRepository.instance.create(
         name: _name.text.trim(),
         phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
-        address: _address.text.trim().isEmpty ? null : _address.text.trim(),
-        lat: double.parse(_lat.text),
-        lng: double.parse(_lng.text),
+        address: _address.text.trim(),
+        lat: _pickedLocation!.latitude,
+        lng: _pickedLocation!.longitude,
       );
       ref.invalidate(myBusinessesProvider);
       if (mounted) context.go('/b/home');
@@ -81,6 +71,7 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Nuevo negocio')),
       body: Center(
@@ -105,26 +96,6 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
                     keyboardType: TextInputType.phone,
                   ),
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, size: 20),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text(
-                            'Esta es la dirección de retiro. Se usa automáticamente para todos los pedidos del comercio.',
-                            style: TextStyle(fontSize: 13),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
                   TextFormField(
                     controller: _address,
                     decoration: const InputDecoration(
@@ -133,37 +104,49 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
                     ),
                     validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
                   ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _useCurrentLocation,
-                    icon: const Icon(Icons.my_location),
-                    label: const Text('Usar mi ubicación actual (GPS)'),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _lat,
-                          decoration: const InputDecoration(labelText: 'Lat'),
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                          validator: (v) => double.tryParse(v ?? '') == null ? 'Inválido' : null,
-                        ),
+                  const SizedBox(height: 16),
+                  // Bloque para marcar en mapa — reemplaza lat/lng manuales.
+                  Card(
+                    color: cs.surfaceContainerHighest,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                _pickedLocation == null ? Icons.location_off : Icons.location_on,
+                                color: _pickedLocation == null ? cs.outline : Colors.green,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  _pickedLocation == null
+                                      ? 'Sin ubicación marcada todavía'
+                                      : 'Ubicación marcada ✓',
+                                  style: Theme.of(context).textTheme.bodyLarge,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            onPressed: _openPicker,
+                            icon: const Icon(Icons.map),
+                            label: Text(
+                              _pickedLocation == null
+                                  ? 'Marcar mi local en el mapa'
+                                  : 'Cambiar ubicación',
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _lng,
-                          decoration: const InputDecoration(labelText: 'Lng'),
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                          validator: (v) => double.tryParse(v ?? '') == null ? 'Inválido' : null,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 12),
-                    Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                    Text(_error!, style: TextStyle(color: cs.error)),
                   ],
                   const SizedBox(height: 24),
                   FilledButton(
