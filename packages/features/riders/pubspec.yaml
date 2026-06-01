@@ -29,6 +29,11 @@ dependencies:
   # cuando el rider toca "Estoy en linea". Sin esto la notif call-style no
   # aparece con el celu bloqueado o con otra app en foreground.
   permission_handler: ^11.3.1
+  # Popup tipo llamada entrante (full-screen + ringtone + accept/decline)
+  # cuando llega una oferta. El plugin trae su propio foreground service
+  # y Activity nativa que se abre sobre el lock screen — es lo que hace
+  # que en ZTE/MIUI/Samsung con battery saver el rider se entere igual.
+  flutter_callkit_incoming: ^2.0.4+2
   la10_auth:
     path: ../auth
   la10_core:

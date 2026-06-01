@@ -19,7 +19,9 @@ Deno.serve(async (req: Request) => {
     const { order_id, rider_id: overrideRider } = await req.json();
     if (!order_id) return json({ error: { code: 'BAD_REQUEST', message: 'order_id required' } }, 400);
 
-    const { data: order, error: oErr } = await sb.from('orders').select('id,status,pickup_location').eq('id', order_id).single();
+    const { data: order, error: oErr } = await sb.from('orders')
+      .select('id,status,pickup_location,pickup_address,dropoff_address,total_amount_cents')
+      .eq('id', order_id).single();
     if (oErr || !order) return json({ error: { code: 'NOT_FOUND', message: 'order not found' } }, 404);
     if (!['pending_assignment','offered'].includes(order.status)) {
       return json({ error: { code: 'CONFLICT', message: `order in status ${order.status}` } }, 409);
@@ -56,11 +58,15 @@ Deno.serve(async (req: Request) => {
     await sb.from('orders').update({ status: 'offered' }).eq('id', order_id);
 
     // Disparamos push notification al rider para que suene aunque tenga el celu
-    // bloqueado o la app cerrada. Llamamos a send-push via fetch directo (no
-    // sb.functions.invoke) para pasar el service-role-key como Bearer — sin
-    // esto send-push rechaza con 401 porque verify_jwt=true y la libreria
-    // functions-js no auto-injecta el JWT del servicio.
+    // bloqueado o la app cerrada. Mandamos los datos de la oferta (pickup,
+    // dropoff, monto) en `data` para que el cliente arme el popup tipo llamada
+    // con flutter_callkit_incoming sin tener que hacer otra query.
+    // send-push tiene verify_jwt=false porque Supabase ya no acepta service_role
+    // como Bearer entre edge functions.
     try {
+      const amountArs = order.total_amount_cents
+        ? (order.total_amount_cents / 100).toFixed(2)
+        : '';
       await fetch(`${url}/functions/v1/send-push`, {
         method: 'POST',
         headers: {
@@ -71,7 +77,14 @@ Deno.serve(async (req: Request) => {
           user_id: chosenRiderId,
           title: '¡Nuevo pedido!',
           body: 'Tenés una oferta esperando.',
-          data: { type: 'offer', offer_id: offer!.id, order_id },
+          data: {
+            type: 'offer',
+            offer_id: offer!.id,
+            order_id,
+            pickup: order.pickup_address ?? '',
+            dropoff: order.dropoff_address ?? '',
+            amount: amountArs,
+          },
         }),
       });
     } catch (_) { /* no rompe el flow del dispatch */ }

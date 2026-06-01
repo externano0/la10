@@ -1,26 +1,24 @@
-/// Servicio FCM para Android/iOS — heads-up MUY visible y confiable.
+/// Servicio FCM para Android/iOS con popup tipo llamada entrante real.
 ///
-/// Estrategia (v0.1.13):
+/// Estrategia (v0.1.14):
 /// - send-push manda payload HIBRIDO (`notification` + `data`).
-/// - El SO Android muestra la heads-up automaticamente usando el campo
-///   `notification` y el `channel_id` que matchea el canal HIGH-importance
-///   que creamos aca. Esto es lo unico que es REALMENTE confiable en celus
-///   con battery saver (ZTE/Samsung/MIUI matan el bg isolate cuando estan
-///   bloqueados y el data-only se pierde).
-/// - El canal tiene `bypassDnd: true`, vibration pattern de "llamada"
-///   largo, LED rojo. El SO la muestra como "urgente" a pantalla completa
-///   visible en lock screen (`visibility: PUBLIC`).
-/// - El campo `data` lleva `type='offer'` + `order_id` para que cuando
-///   el rider toca la notif sepamos llevarlo a `/r/offers`.
-/// - NO mostramos local notification adicional desde el cliente. Antes lo
-///   haciamos con `_localNotifs.show()` + `fullScreenIntent` para imitar
-///   una llamada entrante full-screen, pero en Android 14+ esto requiere
-///   un permiso especial restringido a apps de calling y se duplicaba con
-///   la del SO. Una sola notif manejada por el SO es lo mas confiable.
-///
-/// El popup full-screen estilo WhatsApp-call queda como follow-up:
-/// requeriria foreground service + Activity nativa Kotlin que se lance
-/// directo via Intent. No vale la pena para este round.
+/// - El campo `notification` garantiza heads-up del SO aun con la app
+///   matada por battery saver — ese heads-up es el fallback.
+/// - El campo `data` (`type='offer'`, `order_id`, `pickup`, `dropoff`,
+///   `amount`) lo lee el FCM bg handler para llamar a
+///   `FlutterCallkitIncoming.showCallkitIncoming(...)` y abrir el
+///   popup FULL-SCREEN tipo llamada entrante (foreground service +
+///   Activity nativa que se muestra sobre el lock screen). Eso es lo
+///   que el user pidio: que aparezca como una llamada y que suene
+///   fuerte aunque este bloqueado, en Instagram o en el banco.
+/// - El plugin maneja su propio foreground service → mantiene viva la
+///   conexion y la heads-up incluso cuando el SO mata el resto.
+/// - Si el bg handler no se dispara (caso extremo de OEM agresivo),
+///   queda el fallback del heads-up del SO. Sigue siendo MUY visible
+///   porque el canal `la10_offers_call` tiene Importance.MAX +
+///   vibrationPattern de llamada + LED rojo.
+/// - Eventos del popup: ACCEPT → router lleva al rider a `/r/offers`.
+///   DECLINE → llama a la API de decline.
 
 import 'dart:io' show Platform;
 import 'dart:typed_data' show Int64List;
@@ -28,21 +26,22 @@ import 'dart:typed_data' show Int64List;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_callkit_incoming/entities/entities.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:la10_data/la10_data.dart';
 
 bool _firebaseReady = false;
 
 /// Canal Android — `channel_id` debe matchear lo que manda send-push.
-/// No es const porque vibrationPattern es Int64List runtime.
+/// Es el fallback si flutter_callkit_incoming no logra abrir el popup
+/// full-screen (algunos OEMs muy agresivos).
 final _offersChannel = AndroidNotificationChannel(
   'la10_offers_call',
   'Ofertas de entrega',
   description: 'Suena fuerte y vibra cuando llega una oferta de entrega.',
   importance: Importance.max,
   playSound: true,
-  // Patrón tipo "llamada": espera-vibra-espera-vibra (en ms). El SO
-  // lo repite mientras la heads-up esté visible.
   vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
   enableVibration: true,
   enableLights: true,
@@ -63,9 +62,6 @@ Future<void> initFcm() async {
   await Firebase.initializeApp();
   _firebaseReady = true;
 
-  // local_notifications solo lo usamos para crear el canal con los flags
-  // de "call style" — el SO usa ese canal para mostrar la heads-up del
-  // payload `notification`. No mostramos notifs custom desde el cliente.
   await _localNotifs.initialize(
     const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -75,19 +71,24 @@ Future<void> initFcm() async {
   );
   await _ensureChannel();
 
-  // Permiso de notificaciones (Android 13+ lo pide explícito).
   await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
 
   FirebaseMessaging.onBackgroundMessage(_fcmBackgroundHandler);
+  FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
   FirebaseMessaging.onMessageOpenedApp.listen(_handleTap);
   final initial = await FirebaseMessaging.instance.getInitialMessage();
   if (initial != null) {
     WidgetsBinding.instance.addPostFrameCallback((_) => _handleTap(initial));
   }
+
+  // Eventos del popup callkit (ACCEPT/DECLINE/TIMEOUT). El popup vive
+  // en otra Activity → cuando el rider toca "aceptar" emitimos un
+  // evento que el app principal escucha para navegar.
+  FlutterCallkitIncoming.onEvent.listen(_onCallkitEvent);
 }
 
-/// Crear/actualizar el canal HIGH-importance + bypassDnd. Se llama tanto
-/// en init como en el bg handler (otro isolate).
+/// Crear/actualizar el canal HIGH-importance. Se llama tanto en init
+/// como en el bg handler (otro isolate).
 Future<void> _ensureChannel() async {
   final androidPlugin = _localNotifs
       .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
@@ -95,22 +96,102 @@ Future<void> _ensureChannel() async {
   await androidPlugin.createNotificationChannel(_offersChannel);
 }
 
-/// Top-level: FCM lo invoca desde otro isolate cuando la app está en
-/// background o cerrada. No mostramos notif custom — el SO ya la mostró
-/// con el payload `notification`. Solo nos aseguramos de que el canal
-/// exista (por si esta es la primera vez que la app corre desde el push).
+/// Top-level: FCM lo invoca desde otro isolate cuando la app esta en
+/// background o cerrada. Si el `data` indica oferta, abrimos el popup
+/// full-screen tipo llamada via flutter_callkit_incoming. El plugin
+/// maneja foreground service + Activity con showWhenLocked.
 @pragma('vm:entry-point')
 Future<void> _fcmBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  await _localNotifs.initialize(
-    const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      iOS: DarwinInitializationSettings(),
+  await _ensureChannel();
+  await _maybeShowOfferCall(message);
+}
+
+Future<void> _handleForegroundMessage(RemoteMessage message) async {
+  await _maybeShowOfferCall(message);
+}
+
+/// Si el payload trae `type=offer`, mostramos el popup tipo llamada.
+/// El popup tiene su propio ringtone + vibration; el SO igual mostro
+/// heads-up del `notification` del payload — flutter_callkit_incoming
+/// la pisa con su propia notif persistente del foreground service.
+Future<void> _maybeShowOfferCall(RemoteMessage message) async {
+  final type = message.data['type'] as String?;
+  if (type != 'offer') return;
+  final orderId = (message.data['order_id'] ?? message.data['orderId'] ?? '').toString();
+  final pickup = (message.data['pickup'] ?? message.data['from'] ?? 'Retiro').toString();
+  final dropoff = (message.data['dropoff'] ?? message.data['to'] ?? 'Entrega').toString();
+  final amount = (message.data['amount'] ?? message.data['monto'] ?? '').toString();
+
+  final params = CallKitParams(
+    id: orderId.isEmpty ? DateTime.now().millisecondsSinceEpoch.toString() : orderId,
+    nameCaller: 'Oferta de entrega',
+    appName: 'La 10',
+    // En vez de numero de telefono mostramos el monto. Si no hay monto,
+    // mostramos pickup → dropoff truncado.
+    handle: amount.isNotEmpty ? '\$$amount' : '$pickup → $dropoff',
+    type: 0, // 0 = audio call (no video).
+    duration: 30000, // El popup se cierra solo a los 30s si el rider no contesta.
+    textAccept: 'Aceptar',
+    textDecline: 'Rechazar',
+    missedCallNotification: const NotificationParams(
+      showNotification: false,
+      isShowCallback: false,
+      subtitle: 'Perdiste una oferta',
+    ),
+    extra: {
+      'order_id': orderId,
+      'pickup': pickup,
+      'dropoff': dropoff,
+      'amount': amount,
+    },
+    android: const AndroidParams(
+      isCustomNotification: true,
+      isShowLogo: true,
+      ringtonePath: 'system_ringtone_default',
+      backgroundColor: '#D32F2F',
+      actionColor: '#4CAF50',
+      incomingCallNotificationChannelName: 'la10_offers_call',
+    ),
+    ios: const IOSParams(
+      iconName: 'CallKitLogo',
+      handleType: 'generic',
+      supportsVideo: false,
+      maximumCallGroups: 1,
+      maximumCallsPerCallGroup: 1,
+      audioSessionMode: 'default',
+      audioSessionActive: true,
+      audioSessionPreferredSampleRate: 44100.0,
+      audioSessionPreferredIOBufferDuration: 0.005,
+      supportsDTMF: false,
+      supportsHolding: false,
+      supportsGrouping: false,
+      supportsUngrouping: false,
+      ringtonePath: 'system_ringtone_default',
     ),
   );
-  await _ensureChannel();
-  // No-op: el SO mostro la heads-up del payload `notification`. Aca solo
-  // podriamos prefetchear datos para mostrar mas rapido al tap.
+  await FlutterCallkitIncoming.showCallkitIncoming(params);
+}
+
+void _onCallkitEvent(CallEvent? event) {
+  if (event == null) return;
+  switch (event.event) {
+    case Event.actionCallAccept:
+      // El rider acepto desde el popup. Navegamos a la pantalla de
+      // ofertas para mostrar detalles + confirmar el take.
+      _navigate?.call('/r/offers');
+      break;
+    case Event.actionCallDecline:
+      // Rechazo desde el popup: por ahora solo cerramos. Podriamos
+      // POSTear a la API el decline para que dispatch lo reasigne mas
+      // rapido sin esperar el timeout.
+      break;
+    case Event.actionCallTimeout:
+    case Event.actionCallEnded:
+      break;
+    default:
+      break;
+  }
 }
 
 void _handleTap(RemoteMessage m) {
@@ -121,8 +202,6 @@ void _handleTap(RemoteMessage m) {
 }
 
 void _onLocalNotifTap(NotificationResponse r) {
-  // Si el SO entrego al tap directo a la app (algunos OEMs hacen esto),
-  // navegamos igual a /r/offers.
   _navigate?.call('/r/offers');
 }
 
