@@ -1,21 +1,29 @@
-/// Servicio FCM para Android/iOS con notificación tipo "llamada entrante".
+/// Servicio FCM para Android/iOS — heads-up MUY visible y confiable.
 ///
-/// Estrategia:
-/// - send-push manda payload DATA-only (sin campo `notification`) para
-///   que el SO no muestre la heads-up genérica de mensaje. El cliente
-///   construye la notificación con flutter_local_notifications.
-/// - Usamos categoría `call` + `fullScreenIntent: true` + canal HIGH
-///   importance → en Android el SO pinta la pantalla completa estilo
-///   "llamada entrante" si la app tiene el permiso USE_FULL_SCREEN_INTENT
-///   (que ya pedimos en el sheet "Estoy en línea"). Si no, cae a heads-up
-///   persistente con sonido fuerte y vibración.
-/// - `ongoing: true` hace que la notificación no se pueda deslizar para
-///   descartar — el rider tiene que tocar para entrar a /r/offers.
+/// Estrategia (v0.1.13):
+/// - send-push manda payload HIBRIDO (`notification` + `data`).
+/// - El SO Android muestra la heads-up automaticamente usando el campo
+///   `notification` y el `channel_id` que matchea el canal HIGH-importance
+///   que creamos aca. Esto es lo unico que es REALMENTE confiable en celus
+///   con battery saver (ZTE/Samsung/MIUI matan el bg isolate cuando estan
+///   bloqueados y el data-only se pierde).
+/// - El canal tiene `bypassDnd: true`, vibration pattern de "llamada"
+///   largo, LED rojo. El SO la muestra como "urgente" a pantalla completa
+///   visible en lock screen (`visibility: PUBLIC`).
+/// - El campo `data` lleva `type='offer'` + `order_id` para que cuando
+///   el rider toca la notif sepamos llevarlo a `/r/offers`.
+/// - NO mostramos local notification adicional desde el cliente. Antes lo
+///   haciamos con `_localNotifs.show()` + `fullScreenIntent` para imitar
+///   una llamada entrante full-screen, pero en Android 14+ esto requiere
+///   un permiso especial restringido a apps de calling y se duplicaba con
+///   la del SO. Una sola notif manejada por el SO es lo mas confiable.
 ///
-/// IMPORTANTE: el handler de background tiene que ser top-level (no closure)
-/// y registrar Firebase + flutter_local_notifications en su propio isolate.
+/// El popup full-screen estilo WhatsApp-call queda como follow-up:
+/// requeriria foreground service + Activity nativa Kotlin que se lance
+/// directo via Intent. No vale la pena para este round.
 
 import 'dart:io' show Platform;
+import 'dart:typed_data' show Int64List;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -25,15 +33,20 @@ import 'package:la10_data/la10_data.dart';
 
 bool _firebaseReady = false;
 
-/// Canal Android — match con el `channel_id` que mandaba send-push antes,
-/// pero ahora se crea desde el cliente con todos los flags de "call style".
-const _offersChannel = AndroidNotificationChannel(
+/// Canal Android — `channel_id` debe matchear lo que manda send-push.
+/// No es const porque vibrationPattern es Int64List runtime.
+final _offersChannel = AndroidNotificationChannel(
   'la10_offers_call',
   'Ofertas de entrega',
-  description: 'Suena tipo llamada cuando llega una oferta de entrega.',
+  description: 'Suena fuerte y vibra cuando llega una oferta de entrega.',
   importance: Importance.max,
   playSound: true,
+  // Patrón tipo "llamada": espera-vibra-espera-vibra (en ms). El SO
+  // lo repite mientras la heads-up esté visible.
+  vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
   enableVibration: true,
+  enableLights: true,
+  ledColor: const Color(0xFFD32F2F),
 );
 
 final _localNotifs = FlutterLocalNotificationsPlugin();
@@ -50,7 +63,9 @@ Future<void> initFcm() async {
   await Firebase.initializeApp();
   _firebaseReady = true;
 
-  // Init local_notifications + creación del canal HIGH importance.
+  // local_notifications solo lo usamos para crear el canal con los flags
+  // de "call style" — el SO usa ese canal para mostrar la heads-up del
+  // payload `notification`. No mostramos notifs custom desde el cliente.
   await _localNotifs.initialize(
     const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -58,16 +73,12 @@ Future<void> initFcm() async {
     ),
     onDidReceiveNotificationResponse: _onLocalNotifTap,
   );
-  await _localNotifs
-      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(_offersChannel);
+  await _ensureChannel();
 
   // Permiso de notificaciones (Android 13+ lo pide explícito).
   await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
 
-  // Handlers de FCM.
   FirebaseMessaging.onBackgroundMessage(_fcmBackgroundHandler);
-  FirebaseMessaging.onMessage.listen(_showOfferNotification);
   FirebaseMessaging.onMessageOpenedApp.listen(_handleTap);
   final initial = await FirebaseMessaging.instance.getInitialMessage();
   if (initial != null) {
@@ -75,8 +86,19 @@ Future<void> initFcm() async {
   }
 }
 
+/// Crear/actualizar el canal HIGH-importance + bypassDnd. Se llama tanto
+/// en init como en el bg handler (otro isolate).
+Future<void> _ensureChannel() async {
+  final androidPlugin = _localNotifs
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+  if (androidPlugin == null) return;
+  await androidPlugin.createNotificationChannel(_offersChannel);
+}
+
 /// Top-level: FCM lo invoca desde otro isolate cuando la app está en
-/// background o cerrada. Re-inicializamos lo necesario.
+/// background o cerrada. No mostramos notif custom — el SO ya la mostró
+/// con el payload `notification`. Solo nos aseguramos de que el canal
+/// exista (por si esta es la primera vez que la app corre desde el push).
 @pragma('vm:entry-point')
 Future<void> _fcmBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
@@ -86,53 +108,9 @@ Future<void> _fcmBackgroundHandler(RemoteMessage message) async {
       iOS: DarwinInitializationSettings(),
     ),
   );
-  await _localNotifs
-      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(_offersChannel);
-  await _showOfferNotification(message);
-}
-
-Future<void> _showOfferNotification(RemoteMessage m) async {
-  final type = m.data['type'] as String?;
-  if (type != 'offer') return;
-  final title = (m.data['title'] as String?) ?? '¡Nueva oferta!';
-  final body = (m.data['body'] as String?) ?? 'Tenés una entrega esperando.';
-  final orderId = m.data['order_id'] as String? ?? '';
-
-  await _localNotifs.show(
-    1001, // id fijo: una oferta nueva sobreescribe la anterior si hubiera.
-    title,
-    body,
-    NotificationDetails(
-      android: AndroidNotificationDetails(
-        _offersChannel.id,
-        _offersChannel.name,
-        channelDescription: _offersChannel.description,
-        importance: Importance.max,
-        priority: Priority.max,
-        // Estos flags juntos disparan el popup full-screen estilo "llamada":
-        fullScreenIntent: true,
-        category: AndroidNotificationCategory.call,
-        visibility: NotificationVisibility.public,
-        // Persistente: no se desliza, el rider tiene que tocar.
-        ongoing: true,
-        autoCancel: false,
-        playSound: true,
-        enableVibration: true,
-        ticker: title,
-        // Color rojo para resaltar como "urgente / llamada".
-        color: const Color(0xFFD32F2F),
-        colorized: true,
-        styleInformation: BigTextStyleInformation(body, contentTitle: title),
-      ),
-      iOS: const DarwinNotificationDetails(
-        presentAlert: true,
-        presentSound: true,
-        interruptionLevel: InterruptionLevel.timeSensitive,
-      ),
-    ),
-    payload: orderId,
-  );
+  await _ensureChannel();
+  // No-op: el SO mostro la heads-up del payload `notification`. Aca solo
+  // podriamos prefetchear datos para mostrar mas rapido al tap.
 }
 
 void _handleTap(RemoteMessage m) {
@@ -143,7 +121,8 @@ void _handleTap(RemoteMessage m) {
 }
 
 void _onLocalNotifTap(NotificationResponse r) {
-  // Cuando el user toca la local notification que mostramos nosotros.
+  // Si el SO entrego al tap directo a la app (algunos OEMs hacen esto),
+  // navegamos igual a /r/offers.
   _navigate?.call('/r/offers');
 }
 

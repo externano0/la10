@@ -36,6 +36,19 @@
 </head>
 <body>
   <!--
+    Unregister cualquier service worker viejo que tenga el bundle anterior
+    cacheado. En esta app no usamos offline mode, asi que el SW solo nos
+    daba bola al servir versiones viejas despues de cada deploy a Vercel.
+    Despues de un load post-fix, el browser baja el bundle fresco.
+  -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (rs) {
+        for (var i = 0; i < rs.length; i++) rs[i].unregister();
+      });
+    }
+  </script>
+  <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
     or to give the user feedback during the initialization process.

@@ -1,11 +1,16 @@
 // send-push: dispara una notificación FCM a un usuario.
-// Inputs: { user_id, title, body, data?: Record<string,string> }
-// Requires env var FIREBASE_SERVICE_ACCOUNT_JSON con el JSON de la service
-// account de Firebase (Project settings -> Service accounts -> Generate key).
+// verify_jwt=false porque la llamamos desde otras edge functions; Supabase
+// no acepta el service_role como Bearer entre edge fns. La seguridad real
+// está en FIREBASE_SERVICE_ACCOUNT_JSON (env secret) — sin esa key nadie
+// puede firmar el JWT que valida FCM.
 //
-// Usamos el endpoint HTTP v1 de FCM (el v1, no el legacy).
-// Doc: https://firebase.google.com/docs/cloud-messaging/send-message
-
+// v0.1.13: payload HIBRIDO (notification + data). El campo `notification`
+// es lo que garantiza que el SO Android muestra heads-up incluso si la
+// app fue matada por el battery saver (caso ZTE/Samsung/MIUI con celu
+// bloqueado). El campo `data` lleva `type=offer` + `order_id` para el
+// tap handler. Antes intentamos data-only para mostrar fullScreenIntent
+// custom desde el cliente, pero el bg isolate no arrancaba con la app
+// matada → no llegaba nada.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { create, getNumericDate } from 'https://deno.land/x/djwt@v3.0.2/mod.ts';
@@ -24,7 +29,6 @@ interface ServiceAccount {
 async function getAccessToken(sa: ServiceAccount): Promise<string> {
   const now = getNumericDate(0);
   const exp = getNumericDate(60 * 60);
-  // Importamos la private key PEM como CryptoKey RSA.
   const pem = sa.private_key.replace(/\\n/g, '\n');
   const pemBody = pem.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
   const der = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
@@ -70,7 +74,6 @@ Deno.serve(async (req: Request) => {
     const { user_id, title, body, data } = await req.json();
     if (!user_id || !title) return json({ error: 'user_id, title required' }, 400);
 
-    // Buscamos todos los tokens del usuario (android, ios, web).
     const { data: tokens, error } = await sb.from('fcm_tokens')
       .select('token, platform').eq('user_id', user_id);
     if (error) throw error;
@@ -84,12 +87,11 @@ Deno.serve(async (req: Request) => {
     let sent = 0;
     const errors: unknown[] = [];
     for (const row of tokens) {
-      // HIBRIDO: `notification` (el SO muestra heads-up SOLO aunque la app
-      // este killed / en Doze / MIUI-battery-saver) + `data` (para que el
-      // tap nos lleve a /r/offers). En data-only los pushes se perdian en
-      // MIUI/Xiaomi/Huawei. La opcion `notification_priority: PRIORITY_MAX`
-      // + `channel_id: la10_offers_call` (canal HIGH importance que crea
-      // la app) da heads-up persistente con sonido fuerte y vibracion.
+      // HIBRIDO: notification (display garantizado por el SO incluso con
+      // app matada o celu bloqueado) + data (type + order_id para tap).
+      // El canal `la10_offers_call` esta creado en el cliente con MAX
+      // importance + vibrationPattern de llamada + LED rojo. El SO usa
+      // esos flags al renderizar la heads-up.
       const payload = {
         message: {
           token: row.token,
@@ -99,14 +101,24 @@ Deno.serve(async (req: Request) => {
               .map(([k, v]) => [k, String(v)]),
           ),
           android: {
+            // HIGH despierta el celu aunque esté bloqueado / en Doze.
             priority: 'HIGH',
+            // Sobreescribe ofertas viejas: solo una heads-up por rider.
+            collapse_key: 'offer',
             notification: {
               channel_id: 'la10_offers_call',
               sound: 'default',
               visibility: 'PUBLIC',
               notification_priority: 'PRIORITY_MAX',
-              default_vibrate_timings: true,
-              default_sound: true,
+              // tag controla que una oferta nueva pise la anterior. El
+              // collapse_key arriba es de transporte; tag es del display.
+              tag: 'offer',
+              // No mandamos default_vibrate_timings porque el canal ya
+              // define un pattern custom de "llamada" (1s vibra/0.5s pausa
+              // x3). Si lo dejaramos true, el SO usaria el default y
+              // pisaria nuestro pattern.
+              default_vibrate_timings: false,
+              default_light_settings: false,
             },
           },
           apns: {
@@ -137,7 +149,6 @@ Deno.serve(async (req: Request) => {
       } else {
         const text = await res.text();
         errors.push({ token: row.token.slice(0, 12) + '…', status: res.status, body: text });
-        // Si FCM dice que el token es inválido, lo limpiamos.
         if (res.status === 404 || res.status === 400) {
           await sb.from('fcm_tokens').delete().eq('user_id', user_id).eq('token', row.token);
         }
