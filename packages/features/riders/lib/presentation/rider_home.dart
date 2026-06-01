@@ -7,6 +7,7 @@ import 'package:la10_data/la10_data.dart';
 import 'fcm_service.dart';
 import 'offer_alert_guard.dart';
 import 'offer_ringtone.dart';
+import 'online_mode_sheet.dart';
 import 'rider_gps_tracker.dart';
 
 /// Provider que registra el token FCM una vez, después del login del rider.
@@ -115,12 +116,53 @@ class RiderHome extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Text('Cambiar disponibilidad', style: Theme.of(context).textTheme.titleMedium),
+                // Boton grande "Estoy en linea": abre el bottom sheet que
+                // pide los permisos del SO para que el popup tipo llamada
+                // funcione con el celu bloqueado / con otra app en foreground.
+                // Si ya esta available, mostramos un "Pausar" mas chico.
+                if (rider.status != 'available')
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(64),
+                      backgroundColor: Colors.green,
+                    ),
+                    onPressed: () {
+                      OfferRingtone.instance.warmUp();
+                      showOnlineModeSheet(context, ref);
+                    },
+                    icon: const Icon(Icons.power_settings_new, size: 28),
+                    label: const Text('Estoy en línea', style: TextStyle(fontSize: 20)),
+                  )
+                else
+                  Card(
+                    color: Colors.green.shade50,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Colors.green, size: 32),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              'En línea — vas a recibir ofertas',
+                              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              await RidersRepository.instance.updateStatus('paused');
+                              ref.invalidate(myRiderProvider);
+                            },
+                            child: const Text('Pausar'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   children: [
-                    _StatusBtn(current: rider.status, target: 'available', label: 'Disponible', color: Colors.green, ref: ref),
                     _StatusBtn(current: rider.status, target: 'paused', label: 'Pausado', color: Colors.orange, ref: ref),
                     _StatusBtn(current: rider.status, target: 'offline', label: 'Offline', color: Colors.grey, ref: ref),
                   ],

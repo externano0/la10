@@ -20,6 +20,13 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- SYSTEM_ALERT_WINDOW: necesario para que la oferta pinte por arriba
+         de Instagram / banco / cualquier app en foreground. El user lo da
+         desde la pantalla de Settings que abre permission_handler. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <!-- Sin esto, MIUI/Xiaomi/Samsung tiran la app del background despues de
+         unos minutos y dejan de llegar los pushes. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <application
         android:label="La 10"

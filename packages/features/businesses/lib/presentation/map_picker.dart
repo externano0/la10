@@ -80,18 +80,27 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   }
 
   void _onSearchChanged(String value) {
-    // Debounce simple: esperamos 400ms después del último tecleo para no
-    // bombardear Nominatim (tiene rate limit de ~1 req/seg).
+    // Debounce: esperamos 400ms después del último tecleo para no bombardear
+    // Nominatim. Después de la búsqueda auto-seleccionamos el primer hit y
+    // centramos el mapa ahí. La lista queda colapsada como "más opciones".
     _debounce?.cancel();
     final q = value.trim();
     if (q.length < 3) {
       setState(() => _results = const []);
       return;
     }
-    _debounce = Timer(const Duration(milliseconds: 400), () => _runSearch(q));
+    _debounce = Timer(const Duration(milliseconds: 500), () => _runSearch(q, autoSelect: true));
   }
 
-  Future<void> _runSearch(String q) async {
+  /// Submit explícito (botón o enter) — siempre auto-selecciona el primer hit.
+  Future<void> _submitSearch() async {
+    _debounce?.cancel();
+    final q = _searchCtl.text.trim();
+    if (q.isEmpty) return;
+    await _runSearch(q, autoSelect: true);
+  }
+
+  Future<void> _runSearch(String q, {bool autoSelect = false}) async {
     setState(() => _searching = true);
     final hits = await _nominatim.search(q, limit: 5);
     if (!mounted) return;
@@ -99,6 +108,15 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
       _results = hits;
       _searching = false;
     });
+    // Si tenemos al menos un hit y querían autoselect, movemos el marker al
+    // primer resultado para que el comercio NO tenga que tocar nada extra
+    // — solo ajusta arrastrando si el geocoder cae a media cuadra.
+    if (autoSelect && hits.isNotEmpty) {
+      final hit = hits.first;
+      final point = LatLng(hit.lat, hit.lng);
+      setState(() => _selected = point);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _ctl.move(point, 17));
+    }
   }
 
   void _selectHit(geo.NominatimHit hit) {
@@ -168,6 +186,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
               searching: _searching,
               results: _results,
               onChanged: _onSearchChanged,
+              onSubmit: _submitSearch,
               onHitTap: _selectHit,
             ),
           ),
@@ -199,6 +218,7 @@ class _SearchBar extends StatelessWidget {
     required this.searching,
     required this.results,
     required this.onChanged,
+    required this.onSubmit,
     required this.onHitTap,
   });
 
@@ -206,6 +226,7 @@ class _SearchBar extends StatelessWidget {
   final bool searching;
   final List<geo.NominatimHit> results;
   final ValueChanged<String> onChanged;
+  final VoidCallback onSubmit;
   final void Function(geo.NominatimHit) onHitTap;
 
   @override
@@ -220,6 +241,10 @@ class _SearchBar extends StatelessWidget {
           TextField(
             controller: controller,
             onChanged: onChanged,
+            // Submit en enter: el comercio escribe la direccion + enter y
+            // el mapa se centra en el primer hit. No hace falta tocar nada.
+            onSubmitted: (_) => onSubmit(),
+            textInputAction: TextInputAction.search,
             decoration: InputDecoration(
               hintText: 'Buscar dirección (calle y número)',
               prefixIcon: const Icon(Icons.search),
@@ -230,12 +255,23 @@ class _SearchBar extends StatelessWidget {
                     )
                   : (controller.text.isEmpty
                       ? null
-                      : IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () {
-                            controller.clear();
-                            onChanged('');
-                          },
+                      : Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Buscar',
+                              icon: const Icon(Icons.arrow_forward),
+                              onPressed: onSubmit,
+                            ),
+                            IconButton(
+                              tooltip: 'Limpiar',
+                              icon: const Icon(Icons.close),
+                              onPressed: () {
+                                controller.clear();
+                                onChanged('');
+                              },
+                            ),
+                          ],
                         )),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),

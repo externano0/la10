@@ -25,6 +25,10 @@ dependencies:
   # fullScreenIntent + canal high importance. Sin esto el FCM solo deja una
   # notif normal estilo mensaje.
   flutter_local_notifications: ^18.0.1
+  # Para pedir overlay + ignore-battery + Android14 fullScreenIntent perms
+  # cuando el rider toca "Estoy en linea". Sin esto la notif call-style no
+  # aparece con el celu bloqueado o con otra app en foreground.
+  permission_handler: ^11.3.1
   la10_auth:
     path: ../auth
   la10_core:
