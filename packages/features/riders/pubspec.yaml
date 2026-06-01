@@ -21,6 +21,10 @@ dependencies:
   # FCM para notificaciones push con la app cerrada o el celu bloqueado.
   firebase_core: ^3.8.0
   firebase_messaging: ^15.1.5
+  # Local notifications para mostrar la oferta estilo "llamada entrante" con
+  # fullScreenIntent + canal high importance. Sin esto el FCM solo deja una
+  # notif normal estilo mensaje.
+  flutter_local_notifications: ^18.0.1
   la10_auth:
     path: ../auth
   la10_core:

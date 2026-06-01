@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -19,7 +20,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _phone = TextEditingController();
-  AppRole _selectedRole = AppRole.rider;
+  // En web por default arrancamos en "comercio". Es la única opción visible
+  // ahí (los riders usan el APK). En mobile arrancamos en "rider".
+  AppRole _selectedRole = kIsWeb ? AppRole.businessOwner : AppRole.rider;
   bool _busy = false;
   String? _error;
 
@@ -107,31 +110,51 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('¿Cómo vas a usar La 10?', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _RoleCard(
-                          icon: Icons.two_wheeler,
-                          label: 'Soy rider',
-                          subtitle: 'Hago entregas',
-                          selected: _selectedRole == AppRole.rider,
-                          onTap: _busy ? null : () => setState(() => _selectedRole = AppRole.rider),
+                  // En web solo mostramos "Soy comercio" — los riders se
+                  // registran desde el APK y se confundía a los comercios.
+                  // En mobile mostramos ambas cards.
+                  if (kIsWeb) ...[
+                    Text('Cuenta de comercio', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Los riders se registran desde la app del celular.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 12),
+                    _RoleCard(
+                      icon: Icons.storefront,
+                      label: 'Soy comercio',
+                      subtitle: 'Genero pedidos',
+                      selected: true,
+                      onTap: null,
+                    ),
+                  ] else ...[
+                    Text('¿Cómo vas a usar La 10?', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _RoleCard(
+                            icon: Icons.two_wheeler,
+                            label: 'Soy rider',
+                            subtitle: 'Hago entregas',
+                            selected: _selectedRole == AppRole.rider,
+                            onTap: _busy ? null : () => setState(() => _selectedRole = AppRole.rider),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _RoleCard(
-                          icon: Icons.storefront,
-                          label: 'Soy comercio',
-                          subtitle: 'Genero pedidos',
-                          selected: _selectedRole == AppRole.businessOwner,
-                          onTap: _busy ? null : () => setState(() => _selectedRole = AppRole.businessOwner),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _RoleCard(
+                            icon: Icons.storefront,
+                            label: 'Soy comercio',
+                            subtitle: 'Genero pedidos',
+                            selected: _selectedRole == AppRole.businessOwner,
+                            onTap: _busy ? null : () => setState(() => _selectedRole = AppRole.businessOwner),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   TextFormField(
                     controller: _fullName,

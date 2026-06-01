@@ -20,6 +20,8 @@ dependencies:
     path: ../../core
   la10_data:
     path: ../../data
+  la10_geo:
+    path: ../../geo
   la10_ui:
     path: ../../ui
 

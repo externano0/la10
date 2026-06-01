@@ -84,29 +84,31 @@ Deno.serve(async (req: Request) => {
     let sent = 0;
     const errors: unknown[] = [];
     for (const row of tokens) {
+      // Mandamos DATA-only (sin campo `notification`) para que el cliente
+      // controle 100% la UI: la app móvil usa flutter_local_notifications
+      // con fullScreenIntent para mostrar la oferta tipo "llamada entrante".
+      // Si mandáramos `notification`, FCM mostraría también una notif
+      // default y veríamos dos.
       const payload = {
         message: {
           token: row.token,
-          notification: { title, body: body ?? '' },
           data: Object.fromEntries(
-            Object.entries(data ?? {}).map(([k, v]) => [k, String(v)]),
+            Object.entries({ title, body: body ?? '', ...(data ?? {}) })
+              .map(([k, v]) => [k, String(v)]),
           ),
           android: {
+            // HIGH despierta el celu aunque esté bloqueado / Doze.
             priority: 'HIGH',
-            notification: {
-              channel_id: 'la10_offers',
-              sound: 'default',
-              // Visibilidad en pantalla bloqueada y heads-up.
-              visibility: 'PUBLIC',
-              default_vibrate_timings: true,
-            },
           },
           apns: {
             payload: {
               aps: {
-                sound: 'default',
                 'content-available': 1,
               },
+            },
+            headers: {
+              'apns-priority': '10',
+              'apns-push-type': 'alert',
             },
           },
         },
