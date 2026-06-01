@@ -1,7 +1,8 @@
 /// Formulario para registrar un comercio nuevo.
 /// El comercio carga su dirección UNA sola vez y queda como pickup default
-/// de todas sus órdenes. Para marcar en el mapa abre [MapPickerScreen] —
-/// no se piden números crudos de lat/lng al usuario.
+/// de todas sus órdenes. Usa [AddressField] con autocomplete — escribe la
+/// dirección, elige un resultado y queda el punto fijado. Si necesita afinar,
+/// "Ajustar" abre el [MapPickerScreen].
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,8 +10,8 @@ import 'package:go_router/go_router.dart';
 import 'package:la10_data/la10_data.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'address_field.dart';
 import 'businesses_home.dart';
-import 'map_picker.dart';
 
 class BusinessCreate extends ConsumerStatefulWidget {
   const BusinessCreate({super.key});
@@ -35,17 +36,10 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
     super.dispose();
   }
 
-  Future<void> _openPicker() async {
-    final result = await pickLocationOnMap(context, initial: _pickedLocation);
-    if (result != null && mounted) {
-      setState(() => _pickedLocation = result);
-    }
-  }
-
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
     if (_pickedLocation == null) {
-      setState(() => _error = 'Marcá tu local en el mapa.');
+      setState(() => _error = 'Elegí una dirección del autocomplete o tocá "Elegir en mapa".');
       return;
     }
     setState(() {
@@ -95,54 +89,13 @@ class _BusinessCreateState extends ConsumerState<BusinessCreate> {
                     decoration: const InputDecoration(labelText: 'Teléfono (opcional)'),
                     keyboardType: TextInputType.phone,
                   ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _address,
-                    decoration: const InputDecoration(
-                      labelText: 'Dirección',
-                      hintText: 'Av. Corrientes 1234, CABA',
-                    ),
-                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
-                  ),
                   const SizedBox(height: 16),
-                  // Bloque para marcar en mapa — reemplaza lat/lng manuales.
-                  Card(
-                    color: cs.surfaceContainerHighest,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                _pickedLocation == null ? Icons.location_off : Icons.location_on,
-                                color: _pickedLocation == null ? cs.outline : Colors.green,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Text(
-                                  _pickedLocation == null
-                                      ? 'Sin ubicación marcada todavía'
-                                      : 'Ubicación marcada ✓',
-                                  style: Theme.of(context).textTheme.bodyLarge,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          FilledButton.icon(
-                            onPressed: _openPicker,
-                            icon: const Icon(Icons.map),
-                            label: Text(
-                              _pickedLocation == null
-                                  ? 'Marcar mi local en el mapa'
-                                  : 'Cambiar ubicación',
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                  AddressField(
+                    controller: _address,
+                    labelText: 'Dirección del local',
+                    hintText: 'Av. Corrientes 1234, CABA',
+                    onPicked: (p) => setState(() => _pickedLocation = p),
+                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 12),

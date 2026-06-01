@@ -63,15 +63,10 @@ class _OrderNewState extends ConsumerState<OrderNew> {
     }
   }
 
-  Future<void> _pickDropoff() async {
-    final result = await pickLocationOnMap(context, initial: _dropoffPoint);
-    if (result != null && mounted) setState(() => _dropoffPoint = result);
-  }
-
   Future<void> _save({required bool submitNow}) async {
     if (!_form.currentState!.validate()) return;
     if (_dropoffPoint == null) {
-      setState(() => _error = 'Marcá la dirección de entrega en el mapa.');
+      setState(() => _error = 'Elegí la dirección del autocomplete o tocá "Elegir en mapa".');
       return;
     }
     final biz = await ref.read(_businessProvider(widget.businessId).future);
@@ -212,47 +207,12 @@ class _OrderNewState extends ConsumerState<OrderNew> {
                       const SizedBox(height: 16),
                       Text('Entrega', style: Theme.of(context).textTheme.titleSmall),
                       const SizedBox(height: 8),
-                      TextFormField(
+                      AddressField(
                         controller: _dropoffAddr,
-                        decoration: const InputDecoration(
-                          labelText: 'Dirección de entrega',
-                          hintText: 'Calle Falsa 123, CABA',
-                        ),
+                        labelText: 'Dirección de entrega',
+                        hintText: 'Calle Falsa 123, CABA',
+                        onPicked: (p) => setState(() => _dropoffPoint = p),
                         validator: (v) => (v == null || v.trim().isEmpty) ? 'Requerido' : null,
-                      ),
-                      const SizedBox(height: 8),
-                      Card(
-                        color: cs.surfaceContainerHighest,
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    _dropoffPoint == null ? Icons.location_off : Icons.location_on,
-                                    color: _dropoffPoint == null ? cs.outline : Colors.green,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Text(
-                                      _dropoffPoint == null
-                                          ? 'Sin punto en el mapa todavía'
-                                          : 'Punto marcado ✓',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              FilledButton.icon(
-                                onPressed: _busy ? null : _pickDropoff,
-                                icon: const Icon(Icons.map),
-                                label: Text(_dropoffPoint == null ? 'Marcar en el mapa' : 'Cambiar punto'),
-                              ),
-                            ],
-                          ),
-                        ),
                       ),
                       const SizedBox(height: 16),
                       TextFormField(

@@ -84,26 +84,37 @@ Deno.serve(async (req: Request) => {
     let sent = 0;
     const errors: unknown[] = [];
     for (const row of tokens) {
-      // Mandamos DATA-only (sin campo `notification`) para que el cliente
-      // controle 100% la UI: la app móvil usa flutter_local_notifications
-      // con fullScreenIntent para mostrar la oferta tipo "llamada entrante".
-      // Si mandáramos `notification`, FCM mostraría también una notif
-      // default y veríamos dos.
+      // HIBRIDO: `notification` (el SO muestra heads-up SOLO aunque la app
+      // este killed / en Doze / MIUI-battery-saver) + `data` (para que el
+      // tap nos lleve a /r/offers). En data-only los pushes se perdian en
+      // MIUI/Xiaomi/Huawei. La opcion `notification_priority: PRIORITY_MAX`
+      // + `channel_id: la10_offers_call` (canal HIGH importance que crea
+      // la app) da heads-up persistente con sonido fuerte y vibracion.
       const payload = {
         message: {
           token: row.token,
+          notification: { title, body: body ?? '' },
           data: Object.fromEntries(
             Object.entries({ title, body: body ?? '', ...(data ?? {}) })
               .map(([k, v]) => [k, String(v)]),
           ),
           android: {
-            // HIGH despierta el celu aunque esté bloqueado / Doze.
             priority: 'HIGH',
+            notification: {
+              channel_id: 'la10_offers_call',
+              sound: 'default',
+              visibility: 'PUBLIC',
+              notification_priority: 'PRIORITY_MAX',
+              default_vibrate_timings: true,
+              default_sound: true,
+            },
           },
           apns: {
             payload: {
               aps: {
+                sound: 'default',
                 'content-available': 1,
+                'interruption-level': 'time-sensitive',
               },
             },
             headers: {
