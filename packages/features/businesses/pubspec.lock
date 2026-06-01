@@ -321,7 +321,7 @@ packages:
     source: path
     version: "0.0.0"
   la10_geo:
-    dependency: "direct overridden"
+    dependency: "direct main"
     description:
       path: "../../geo"
       relative: true
