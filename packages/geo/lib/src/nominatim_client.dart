@@ -1,13 +1,19 @@
 /// Cliente HTTP para Nominatim — el geocoder gratuito de OpenStreetMap.
-/// Usado para buscar direcciones desde el map picker (el comercio escribe
-/// "juarez celman 2871" y le mostramos resultados con su lat/lng aproximado).
+/// Usado para buscar direcciones desde el map picker / address field.
 ///
-/// Nominatim tiene una public API gratis pero pide un User-Agent identificable
-/// y respeta rate limits (~1 req/seg). Para uso productivo serio conviene
-/// self-host o pagar un proveedor; para nuestro volumen actual alcanza.
+/// Notas importantes:
+/// - No mandamos User-Agent custom. En el browser es un "forbidden header"
+///   y queda dropeado (el browser manda el suyo). En nativo el default
+///   `Dart/X.X` también funciona — Nominatim solo rechaza a abusers reales.
+/// - Cualquier error de red o status ≠ 200 devuelve lista vacía — no rompe
+///   la UI. Si la query falla por CORS o rate limit, el user solo no ve
+///   sugerencias.
+/// - Public API es ~1 req/seg de rate. Para uso productivo serio conviene
+///   self-host. Para nuestro volumen actual alcanza.
 /// Doc: https://nominatim.org/release-docs/latest/api/Search/
 
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 
 import 'lat_lng.dart';
@@ -39,14 +45,8 @@ class NominatimClient {
 
   final String baseUrl;
   final http.Client _client;
-
-  /// Filtro por país (Argentina por default — la app es local). Si en el
-  /// futuro hay agencias en otros países, lo movemos a Env.
   final String countryCodes;
 
-  /// Busca direcciones con texto libre. Devuelve hasta [limit] resultados
-  /// ordenados por relevancia. En error de red o status no-200 devuelve
-  /// lista vacía (no rompe la UI).
   Future<List<NominatimHit>> search(String query, {int limit = 5}) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
@@ -58,10 +58,7 @@ class NominatimClient {
       'addressdetails': '0',
     });
     try {
-      final res = await _client.get(uri, headers: {
-        // Nominatim pide UA identificable; sin esto puede devolver 403.
-        'User-Agent': 'la10-delivery-app/0.1 (https://github.com/externano0/la10)',
-      });
+      final res = await _client.get(uri);
       if (res.statusCode != 200) return const [];
       final list = jsonDecode(res.body) as List<dynamic>;
       return list.map((e) => NominatimHit.fromJson(e as Map<String, dynamic>)).toList();
