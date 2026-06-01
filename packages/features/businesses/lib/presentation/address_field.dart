@@ -94,6 +94,39 @@ class _AddressFieldState extends State<AddressField> {
     });
   }
 
+  /// Submit (Enter o botón) — busca si no buscó, agarra el primer hit y
+  /// abre el mapa centrado ahí para que el user fine-tune el punto exacto.
+  Future<void> _onSubmit() async {
+    _debounce?.cancel();
+    final q = widget.controller.text.trim();
+    if (q.isEmpty) return;
+    var hits = _hits;
+    if (hits.isEmpty) {
+      setState(() => _searching = true);
+      hits = await _nominatim.search(q, limit: 5);
+      if (!mounted) return;
+      setState(() {
+        _hits = hits;
+        _searching = false;
+      });
+    }
+    if (hits.isEmpty) return;
+    final first = hits.first;
+    // Abrimos el mapa con el primer hit ya marcado. El user lo arrastra/toca
+    // si necesita afinar (geocoder cae a media cuadra a veces).
+    final initial = LatLng(first.lat, first.lng);
+    final result = await pickLocationOnMap(context, initial: initial);
+    if (!mounted) return;
+    final point = result ?? initial;
+    _suppressNext = true;
+    widget.controller.text = first.displayName;
+    setState(() {
+      _picked = point;
+      _hits = const [];
+    });
+    widget.onPicked(point);
+  }
+
   void _select(geo.NominatimHit hit) {
     final point = LatLng(hit.lat, hit.lng);
     _suppressNext = true;
@@ -123,6 +156,8 @@ class _AddressFieldState extends State<AddressField> {
         TextFormField(
           controller: widget.controller,
           onChanged: _onChanged,
+          onFieldSubmitted: (_) => _onSubmit(),
+          textInputAction: TextInputAction.search,
           validator: widget.validator,
           decoration: InputDecoration(
             labelText: widget.labelText,
@@ -132,7 +167,11 @@ class _AddressFieldState extends State<AddressField> {
                     padding: EdgeInsets.all(12),
                     child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
                   )
-                : null,
+                : IconButton(
+                    tooltip: 'Buscar y ajustar en el mapa',
+                    icon: const Icon(Icons.search),
+                    onPressed: _onSubmit,
+                  ),
           ),
         ),
         // Lista de sugerencias del autocomplete.

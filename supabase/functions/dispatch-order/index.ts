@@ -56,16 +56,23 @@ Deno.serve(async (req: Request) => {
     await sb.from('orders').update({ status: 'offered' }).eq('id', order_id);
 
     // Disparamos push notification al rider para que suene aunque tenga el celu
-    // bloqueado o la app cerrada. Es fire-and-forget — si falla el push, la
-    // oferta sigue viva y el rider la verá cuando vuelva a abrir la app.
+    // bloqueado o la app cerrada. Llamamos a send-push via fetch directo (no
+    // sb.functions.invoke) para pasar el service-role-key como Bearer — sin
+    // esto send-push rechaza con 401 porque verify_jwt=true y la libreria
+    // functions-js no auto-injecta el JWT del servicio.
     try {
-      await sb.functions.invoke('send-push', {
-        body: {
+      await fetch(`${url}/functions/v1/send-push`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${service}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           user_id: chosenRiderId,
           title: '¡Nuevo pedido!',
           body: 'Tenés una oferta esperando.',
           data: { type: 'offer', offer_id: offer!.id, order_id },
-        },
+        }),
       });
     } catch (_) { /* no rompe el flow del dispatch */ }
 
