@@ -1,19 +1,20 @@
-/// Campo de dirección con autocomplete inline.
+/// Campo de dirección con autocomplete inline + mini-mapa embedded.
 ///
-/// El usuario escribe la dirección y debajo le aparecen los resultados de
-/// Nominatim (OSM). Toca uno y queda fijado: nos da [LatLng] sin necesidad
-/// de abrir el mapa.
+/// Flujo:
+/// 1. El user escribe la dirección.
+/// 2. Debajo aparecen sugerencias de Nominatim. Toca una → punto fijado.
+/// 3. Alternativa: Enter o el botón lupa busca y agarra el primer hit.
+/// 4. Cuando hay punto fijado, aparece **un mini-mapa debajo** mostrando
+///    la ubicación. Si querés ajustar, tocás el mapa y abre el picker en
+///    pantalla completa para mover el marker con precisión.
 ///
-/// Si querés ajustar más fino, el botón "Ajustar en el mapa" abre el
-/// [MapPickerScreen] partiendo del punto elegido.
-///
-/// Esto reemplaza al flujo viejo de "TextField → botón Marcar en mapa →
-/// picker → tap → vuelta" que era confuso. La idea: 90% de las veces el
-/// comercio escribe la dirección, toca el primer hit, listo.
+/// Filosofía: 90% de los comercios escriben la dirección y listo. El mapa
+/// es solo confirmación visual + ajuste opcional.
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:la10_geo/la10_geo.dart' as geo;
 import 'package:latlong2/latlong.dart';
 
@@ -30,16 +31,9 @@ class AddressField extends StatefulWidget {
     this.validator,
   });
 
-  /// Texto editable de la dirección (lo guardás en tu form como string libre).
   final TextEditingController controller;
-
-  /// Se invoca cuando el user elige un resultado del autocomplete o ajusta
-  /// el punto desde el mapa. Pasamos `null` si limpia el resultado.
   final ValueChanged<LatLng?> onPicked;
-
-  /// Punto inicial — si lo tenés (ej. editando un negocio existente).
   final LatLng? initial;
-
   final String labelText;
   final String? hintText;
   final String? Function(String?)? validator;
@@ -50,6 +44,7 @@ class AddressField extends StatefulWidget {
 
 class _AddressFieldState extends State<AddressField> {
   final _nominatim = geo.NominatimClient();
+  final _mapController = MapController();
   Timer? _debounce;
   List<geo.NominatimHit> _hits = const [];
   bool _searching = false;
@@ -94,8 +89,9 @@ class _AddressFieldState extends State<AddressField> {
     });
   }
 
-  /// Submit (Enter o botón) — busca si no buscó, agarra el primer hit y
-  /// abre el mapa centrado ahí para que el user fine-tune el punto exacto.
+  /// Submit (Enter o botón lupa) — agarra el primer hit y lo deja fijado.
+  /// NO abre el picker — el user lo abre si quiere ajustar tocando el
+  /// mini-mapa que aparece abajo.
   Future<void> _onSubmit() async {
     _debounce?.cancel();
     final q = widget.controller.text.trim();
@@ -111,23 +107,10 @@ class _AddressFieldState extends State<AddressField> {
       });
     }
     if (hits.isEmpty) return;
-    final first = hits.first;
-    // Abrimos el mapa con el primer hit ya marcado. El user lo arrastra/toca
-    // si necesita afinar (geocoder cae a media cuadra a veces).
-    final initial = LatLng(first.lat, first.lng);
-    final result = await pickLocationOnMap(context, initial: initial);
-    if (!mounted) return;
-    final point = result ?? initial;
-    _suppressNext = true;
-    widget.controller.text = first.displayName;
-    setState(() {
-      _picked = point;
-      _hits = const [];
-    });
-    widget.onPicked(point);
+    _selectHit(hits.first);
   }
 
-  void _select(geo.NominatimHit hit) {
+  void _selectHit(geo.NominatimHit hit) {
     final point = LatLng(hit.lat, hit.lng);
     _suppressNext = true;
     widget.controller.text = hit.displayName;
@@ -137,6 +120,13 @@ class _AddressFieldState extends State<AddressField> {
     });
     widget.onPicked(point);
     FocusScope.of(context).unfocus();
+    // Si el mapa ya estaba renderizado, lo movemos al nuevo punto. El
+    // postFrameCallback espera a que el MapController esté listo.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        _mapController.move(point, 16);
+      } catch (_) {/* mapa todavía no renderizado, se centra solo al build */}
+    });
   }
 
   Future<void> _openPickerForFineTune() async {
@@ -144,6 +134,11 @@ class _AddressFieldState extends State<AddressField> {
     if (result != null && mounted) {
       setState(() => _picked = result);
       widget.onPicked(result);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        try {
+          _mapController.move(result, 16);
+        } catch (_) {/* idem */}
+      });
     }
   }
 
@@ -168,13 +163,13 @@ class _AddressFieldState extends State<AddressField> {
                     child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
                   )
                 : IconButton(
-                    tooltip: 'Buscar y ajustar en el mapa',
+                    tooltip: 'Buscar dirección',
                     icon: const Icon(Icons.search),
                     onPressed: _onSubmit,
                   ),
           ),
         ),
-        // Lista de sugerencias del autocomplete.
+        // Sugerencias del autocomplete.
         if (_hits.isNotEmpty)
           Card(
             margin: const EdgeInsets.only(top: 4),
@@ -184,38 +179,104 @@ class _AddressFieldState extends State<AddressField> {
                   leading: const Icon(Icons.place),
                   dense: true,
                   title: Text(h.displayName, maxLines: 2, overflow: TextOverflow.ellipsis),
-                  onTap: () => _select(h),
+                  onTap: () => _selectHit(h),
                 );
               }).toList(),
             ),
           ),
-        // Estado de la ubicación + botón de ajuste fino.
-        Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Row(
-            children: [
-              Icon(
-                _picked != null ? Icons.location_on : Icons.location_off,
-                size: 16,
-                color: _picked != null ? Colors.green : cs.outline,
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  _picked != null
-                      ? 'Punto fijado — podés ajustar con el mapa si hace falta'
-                      : 'Escribí la dirección y elegí un resultado.',
-                  style: Theme.of(context).textTheme.bodySmall,
+        // Mini-mapa embedded — solo aparece cuando hay un punto fijado.
+        // Tap → abre picker fullscreen para ajustar.
+        if (_picked != null) ...[
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: _openPickerForFineTune,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                height: 180,
+                child: Stack(
+                  children: [
+                    FlutterMap(
+                      mapController: _mapController,
+                      options: MapOptions(
+                        initialCenter: _picked!,
+                        initialZoom: 16,
+                        // Desactivamos drag/zoom adentro del mini-mapa porque
+                        // el tap arriba lo usamos para abrir el picker. Si
+                        // querés mover, abrís el picker.
+                        interactionOptions: const InteractionOptions(
+                          flags: InteractiveFlag.none,
+                        ),
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'com.la10.app',
+                          maxZoom: 19,
+                        ),
+                        MarkerLayer(
+                          markers: [
+                            Marker(
+                              point: _picked!,
+                              width: 48,
+                              height: 48,
+                              child: const Icon(Icons.location_on, size: 48, color: Colors.red),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    // Overlay con hint de "tocá para ajustar".
+                    Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.touch_app, color: Colors.white, size: 14),
+                            SizedBox(width: 4),
+                            Text(
+                              'Tocá para ajustar',
+                              style: TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              TextButton.icon(
-                onPressed: _openPickerForFineTune,
-                icon: const Icon(Icons.map, size: 18),
-                label: Text(_picked != null ? 'Ajustar' : 'Elegir en mapa'),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
+        // Status text — fallback cuando no hay punto todavía.
+        if (_picked == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              children: [
+                Icon(Icons.location_off, size: 16, color: cs.outline),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    'Escribí la dirección y elegí una sugerencia.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _openPickerForFineTune,
+                  icon: const Icon(Icons.map, size: 18),
+                  label: const Text('Elegir en mapa'),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }

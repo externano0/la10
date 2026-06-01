@@ -1,21 +1,19 @@
-/// Servicio FCM para Android/iOS.
+/// Servicio FCM para Android/iOS con notificación tipo "llamada entrante".
 ///
 /// Estrategia:
-/// - Mandamos payload hibrido (`notification` + `data`) desde `send-push`.
-/// - El SO Android muestra la heads-up con sonido + vibración via el campo
-///   `notification` y el `channel_id` que matchea el canal creado acá.
-///   Esto funciona incluso si la app está killed / MIUI mata el background.
-/// - El campo `data` lo usamos para enrutar cuando el rider toca la notif
-///   (vamos a `/r/offers` donde el guard de realtime levanta el popup).
-/// - El popup full-screen de Flutter aparece dentro de la app cuando el
-///   rider la abre — eso ya andaba antes y sigue.
+/// - send-push manda payload DATA-only (sin campo `notification`) para
+///   que el SO no muestre la heads-up genérica de mensaje. El cliente
+///   construye la notificación con flutter_local_notifications.
+/// - Usamos categoría `call` + `fullScreenIntent: true` + canal HIGH
+///   importance → en Android el SO pinta la pantalla completa estilo
+///   "llamada entrante" si la app tiene el permiso USE_FULL_SCREEN_INTENT
+///   (que ya pedimos en el sheet "Estoy en línea"). Si no, cae a heads-up
+///   persistente con sonido fuerte y vibración.
+/// - `ongoing: true` hace que la notificación no se pueda deslizar para
+///   descartar — el rider tiene que tocar para entrar a /r/offers.
 ///
-/// Antes intentamos `flutter_local_notifications` con `fullScreenIntent`
-/// para pintar pantalla completa estilo "llamada entrante", pero en
-/// Android 14+ requiere un permiso especial restringido a apps de calling
-/// y en MIUI/Xiaomi se traba con battery saver. Volvemos al payload hibrido
-/// que sí llega siempre — sacrificamos el efecto "incoming call full-screen"
-/// por garantía de que el rider se entera.
+/// IMPORTANTE: el handler de background tiene que ser top-level (no closure)
+/// y registrar Firebase + flutter_local_notifications en su propio isolate.
 
 import 'dart:io' show Platform;
 
@@ -27,11 +25,12 @@ import 'package:la10_data/la10_data.dart';
 
 bool _firebaseReady = false;
 
-/// Canal Android que matchea `channel_id` que manda send-push.
+/// Canal Android — match con el `channel_id` que mandaba send-push antes,
+/// pero ahora se crea desde el cliente con todos los flags de "call style".
 const _offersChannel = AndroidNotificationChannel(
   'la10_offers_call',
   'Ofertas de entrega',
-  description: 'Suena fuerte cuando llega una oferta.',
+  description: 'Suena tipo llamada cuando llega una oferta de entrega.',
   importance: Importance.max,
   playSound: true,
   enableVibration: true,
@@ -51,8 +50,36 @@ Future<void> initFcm() async {
   await Firebase.initializeApp();
   _firebaseReady = true;
 
-  // Solo necesitamos local_notifications para CREAR el canal HIGH importance
-  // que después usa FCM al recibir el push. No mostramos notifs custom.
+  // Init local_notifications + creación del canal HIGH importance.
+  await _localNotifs.initialize(
+    const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(),
+    ),
+    onDidReceiveNotificationResponse: _onLocalNotifTap,
+  );
+  await _localNotifs
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(_offersChannel);
+
+  // Permiso de notificaciones (Android 13+ lo pide explícito).
+  await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
+
+  // Handlers de FCM.
+  FirebaseMessaging.onBackgroundMessage(_fcmBackgroundHandler);
+  FirebaseMessaging.onMessage.listen(_showOfferNotification);
+  FirebaseMessaging.onMessageOpenedApp.listen(_handleTap);
+  final initial = await FirebaseMessaging.instance.getInitialMessage();
+  if (initial != null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _handleTap(initial));
+  }
+}
+
+/// Top-level: FCM lo invoca desde otro isolate cuando la app está en
+/// background o cerrada. Re-inicializamos lo necesario.
+@pragma('vm:entry-point')
+Future<void> _fcmBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
   await _localNotifs.initialize(
     const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -62,18 +89,50 @@ Future<void> initFcm() async {
   await _localNotifs
       .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(_offersChannel);
+  await _showOfferNotification(message);
+}
 
-  // Permiso para mostrar notificaciones (Android 13+ lo pide explícito).
-  await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
+Future<void> _showOfferNotification(RemoteMessage m) async {
+  final type = m.data['type'] as String?;
+  if (type != 'offer') return;
+  final title = (m.data['title'] as String?) ?? '¡Nueva oferta!';
+  final body = (m.data['body'] as String?) ?? 'Tenés una entrega esperando.';
+  final orderId = m.data['order_id'] as String? ?? '';
 
-  // App en background y el user tocó la notificación.
-  FirebaseMessaging.onMessageOpenedApp.listen(_handleTap);
-
-  // App estaba cerrada y se abrió por tocar la notif.
-  final initial = await FirebaseMessaging.instance.getInitialMessage();
-  if (initial != null) {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _handleTap(initial));
-  }
+  await _localNotifs.show(
+    1001, // id fijo: una oferta nueva sobreescribe la anterior si hubiera.
+    title,
+    body,
+    NotificationDetails(
+      android: AndroidNotificationDetails(
+        _offersChannel.id,
+        _offersChannel.name,
+        channelDescription: _offersChannel.description,
+        importance: Importance.max,
+        priority: Priority.max,
+        // Estos flags juntos disparan el popup full-screen estilo "llamada":
+        fullScreenIntent: true,
+        category: AndroidNotificationCategory.call,
+        visibility: NotificationVisibility.public,
+        // Persistente: no se desliza, el rider tiene que tocar.
+        ongoing: true,
+        autoCancel: false,
+        playSound: true,
+        enableVibration: true,
+        ticker: title,
+        // Color rojo para resaltar como "urgente / llamada".
+        color: const Color(0xFFD32F2F),
+        colorized: true,
+        styleInformation: BigTextStyleInformation(body, contentTitle: title),
+      ),
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentSound: true,
+        interruptionLevel: InterruptionLevel.timeSensitive,
+      ),
+    ),
+    payload: orderId,
+  );
 }
 
 void _handleTap(RemoteMessage m) {
@@ -83,25 +142,25 @@ void _handleTap(RemoteMessage m) {
   }
 }
 
+void _onLocalNotifTap(NotificationResponse r) {
+  // Cuando el user toca la local notification que mostramos nosotros.
+  _navigate?.call('/r/offers');
+}
+
 Future<void> registerFcmToken() async {
   if (!_firebaseReady) return;
   final messaging = FirebaseMessaging.instance;
-
   await messaging.requestPermission(alert: true, badge: true, sound: true);
-
   final token = await messaging.getToken();
   if (token == null) return;
-
   final user = La10Supabase.auth.currentUser;
   if (user == null) return;
-
   final platform = Platform.isAndroid ? 'android' : (Platform.isIOS ? 'ios' : 'unknown');
   await La10Supabase.client.from('fcm_tokens').upsert({
     'user_id': user.id,
     'token': token,
     'platform': platform,
   });
-
   messaging.onTokenRefresh.listen((newToken) async {
     final u = La10Supabase.auth.currentUser;
     if (u == null) return;
