@@ -30,7 +30,7 @@ final _myActiveOrderProvider = StreamProvider<OrderRow?>((ref) async* {
     yield null;
     return;
   }
-  yield* OrdersRepository.instance.watchMyActive(rider.riderId);
+  yield* OrdersRepository.instance.watchMyActive(rider.userId);
 });
 
 class RiderHome extends ConsumerWidget {
