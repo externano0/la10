@@ -23,9 +23,10 @@
 import 'dart:io' show Platform;
 import 'dart:typed_data' show Int64List;
 
+import 'dart:ui' show DartPluginRegistrant;
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/services.dart' show DartPluginRegistrant;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
