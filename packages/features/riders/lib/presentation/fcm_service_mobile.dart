@@ -100,6 +100,42 @@ Future<void> initFcm() async {
   // en otra Activity → cuando el rider toca "aceptar" emitimos un
   // evento que el app principal escucha para navegar.
   FlutterCallkitIncoming.onEvent.listen(_onCallkitEvent);
+
+  // Caso "app matada → callkit Activity → user accept": el broadcast
+  // receiver del plugin manda el evento via MethodChannel pero como el
+  // Flutter engine NO estaba vivo cuando se aceptó, el evento se pierde.
+  // Workaround: al bootear, consultamos activeCalls(). Si hay una con
+  // order_id, asumimos que el user accepto antes y navegamos ahi.
+  await _drainAcceptedCallOnBoot();
+}
+
+/// Lee llamadas activas al bootear y si encuentra una con order_id la
+/// procesa (respond accepted + navigate + endCall). Cubre el caso
+/// "user accepto mientras la app estaba matada".
+Future<void> _drainAcceptedCallOnBoot() async {
+  try {
+    final result = await FlutterCallkitIncoming.activeCalls();
+    if (result is! List || result.isEmpty) return;
+    final call = result.first;
+    if (call is! Map) return;
+    final extra = call['extra'];
+    if (extra is! Map) return;
+    final orderId = extra['order_id']?.toString() ?? '';
+    final offerId = extra['offer_id']?.toString() ?? '';
+    if (orderId.isEmpty) return;
+    if (offerId.isNotEmpty) {
+      try {
+        await OffersRepository.instance.respond(offerId, 'accepted');
+      } catch (_) {/* no rompe el flow */}
+    }
+    _pendingNavOrderId = orderId;
+    final callId = call['id']?.toString();
+    if (callId != null) {
+      try {
+        await FlutterCallkitIncoming.endCall(callId);
+      } catch (_) {/* idem */}
+    }
+  } catch (_) {/* no callkit / no calls */}
 }
 
 /// Crear/actualizar el canal HIGH-importance. Se llama tanto en init
@@ -138,6 +174,7 @@ Future<void> _maybeShowOfferCall(RemoteMessage message) async {
   final dropoff = (message.data['dropoff'] ?? message.data['to'] ?? 'Entrega').toString();
   final amount = (message.data['amount'] ?? message.data['monto'] ?? '').toString();
 
+  final offerId = (message.data['offer_id'] ?? message.data['offerId'] ?? '').toString();
   final params = CallKitParams(
     id: orderId.isEmpty ? DateTime.now().millisecondsSinceEpoch.toString() : orderId,
     nameCaller: 'Oferta de entrega',
@@ -155,6 +192,10 @@ Future<void> _maybeShowOfferCall(RemoteMessage message) async {
       subtitle: 'Perdiste una oferta',
     ),
     extra: {
+      // offer_id es CRITICO — el accept handler lo usa para postear
+      // respond('accepted') a la API. Si falta, la oferta queda pending
+      // y el rider tiene que ir a /r/offers a aceptar manualmente.
+      'offer_id': offerId,
       'order_id': orderId,
       'pickup': pickup,
       'dropoff': dropoff,

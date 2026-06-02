@@ -19,6 +19,7 @@
 /// "Estoy en línea / Recibir ofertas" o cuando toca "Disponible".
 
 import 'package:flutter/material.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:la10_data/la10_data.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -72,6 +73,12 @@ class _OnlineModeSheet extends ConsumerStatefulWidget {
 
 class _OnlineModeSheetState extends ConsumerState<_OnlineModeSheet> {
   Map<Permission, PermissionStatus> _status = {};
+  // Android 14+ requiere un permiso separado para que las heads-up tipo
+  // "incoming call" se rendericen como Activity full-screen sobre el
+  // lock screen. Sin esto solo aparece un heads-up normal (o nada con
+  // celu bloqueado). Lo manejamos via la API del plugin callkit porque
+  // permission_handler no lo expone.
+  bool _fullScreenIntent = false;
   bool _busy = false;
 
   @override
@@ -85,7 +92,17 @@ class _OnlineModeSheetState extends ConsumerState<_OnlineModeSheet> {
     for (final p in _required) {
       s[p.permission] = await p.permission.status;
     }
-    if (mounted) setState(() => _status = s);
+    bool fsi = false;
+    try {
+      final r = await FlutterCallkitIncoming.canUseFullScreenIntent();
+      fsi = r == true;
+    } catch (_) {/* plugin no disponible en este device */}
+    if (mounted) {
+      setState(() {
+        _status = s;
+        _fullScreenIntent = fsi;
+      });
+    }
   }
 
   Future<void> _requestAll() async {
@@ -98,6 +115,13 @@ class _OnlineModeSheetState extends ConsumerState<_OnlineModeSheet> {
       if (current.isGranted) continue;
       await p.permission.request();
     }
+    // Full screen intent — abre Settings → Apps → La 10 → Notifications →
+    // "Allow full-screen notifications". El user lo activa y vuelve.
+    if (!_fullScreenIntent) {
+      try {
+        await FlutterCallkitIncoming.requestFullIntentPermission();
+      } catch (_) {/* idem */}
+    }
     await _refresh();
     if (mounted) setState(() => _busy = false);
   }
@@ -108,7 +132,8 @@ class _OnlineModeSheetState extends ConsumerState<_OnlineModeSheet> {
     if (mounted) Navigator.of(context).pop();
   }
 
-  bool get _allGranted => _status.values.every((s) => s.isGranted);
+  bool get _allGranted =>
+      _status.values.every((s) => s.isGranted) && _fullScreenIntent;
 
   @override
   Widget build(BuildContext context) {
@@ -145,29 +170,19 @@ class _OnlineModeSheetState extends ConsumerState<_OnlineModeSheet> {
             const SizedBox(height: 16),
             ..._required.map((p) {
               final granted = _status[p.permission]?.isGranted ?? false;
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  children: [
-                    Icon(
-                      granted ? Icons.check_circle : Icons.radio_button_unchecked,
-                      color: granted ? Colors.green : cs.outline,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(p.title,
-                              style: const TextStyle(fontWeight: FontWeight.w600)),
-                          Text(p.subtitle, style: Theme.of(context).textTheme.bodySmall),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+              return _PermRow(
+                granted: granted,
+                title: p.title,
+                subtitle: p.subtitle,
               );
             }),
+            // Row extra para Android 14+ full-screen notifications.
+            _PermRow(
+              granted: _fullScreenIntent,
+              title: 'Notificaciones de pantalla completa',
+              subtitle: 'Para que el pop tipo llamada aparezca con el celu '
+                  'bloqueado o sobre Instagram (Android 14+).',
+            ),
             const SizedBox(height: 20),
             if (!_allGranted)
               FilledButton.icon(
@@ -193,6 +208,43 @@ class _OnlineModeSheetState extends ConsumerState<_OnlineModeSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PermRow extends StatelessWidget {
+  const _PermRow({
+    required this.granted,
+    required this.title,
+    required this.subtitle,
+  });
+  final bool granted;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(
+            granted ? Icons.check_circle : Icons.radio_button_unchecked,
+            color: granted ? Colors.green : cs.outline,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
