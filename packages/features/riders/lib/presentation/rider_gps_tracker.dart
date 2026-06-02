@@ -1,15 +1,24 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// geolocator re-exporta AndroidSettings + ForegroundNotificationConfig
+// desde el platform-specific geolocator_android, no hace falta importar
+// el package aparte.
 import 'package:geolocator/geolocator.dart';
 import 'package:la10_data/la10_data.dart';
 import 'package:la10_geo/la10_geo.dart' as geo;
 
 import 'offer_ringtone.dart';
+import 'rider_home.dart' show myRiderProvider;
 
-/// Toggleable card that streams the device GPS and pushes heartbeats to
-/// the rider-heartbeat edge fn, throttled by [RiderHeartbeatThrottle].
+/// Tracker de GPS del rider. Se auto-arranca cuando el estado del rider
+/// en la DB es `available` (asi reabrir la app NO te obliga a tocar el
+/// switch otra vez) y usa un foreground service en Android para que la
+/// lectura de GPS y los heartbeats sigan funcionando con la app en
+/// segundo plano. Mientras corre, aparece una notif persistente
+/// "La 10 — en linea" que el usuario reconoce.
 class RiderGpsTracker extends ConsumerStatefulWidget {
   const RiderGpsTracker({super.key});
 
@@ -25,6 +34,7 @@ class _RiderGpsTrackerState extends ConsumerState<RiderGpsTracker> {
   String? _error;
   Position? _last;
   int _sent = 0;
+  String? _lastSyncedRiderStatus;
 
   @override
   void dispose() {
@@ -32,13 +42,17 @@ class _RiderGpsTrackerState extends ConsumerState<RiderGpsTracker> {
     super.dispose();
   }
 
-  Future<void> _toggle(bool on) async {
-    // Habilita audio aprovechando este gesto del usuario; el ringtone
-    // de oferta lo necesita más tarde.
-    OfferRingtone.instance.warmUp();
-    if (on) {
+  /// Sincroniza el tracker con el estado del rider en la DB.
+  /// - status='available' → si no esta corriendo, lo arranca.
+  /// - cualquier otro estado → si esta corriendo, lo apaga.
+  /// Se llama desde build() solo cuando el status cambio (guardamos
+  /// `_lastSyncedRiderStatus` para no re-disparar en cada rebuild).
+  Future<void> _syncWithRiderStatus(String? riderStatus) async {
+    if (_lastSyncedRiderStatus == riderStatus) return;
+    _lastSyncedRiderStatus = riderStatus;
+    if (riderStatus == 'available' && !_on && !_starting) {
       await _start();
-    } else {
+    } else if (riderStatus != 'available' && _on) {
       await _stop();
     }
   }
@@ -62,25 +76,45 @@ class _RiderGpsTrackerState extends ConsumerState<RiderGpsTracker> {
         throw StateError('Permiso de ubicación denegado.');
       }
 
-      _sub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 10,
-        ),
-      ).listen(_onPosition, onError: (Object e) {
-        setState(() => _error = '$e');
+      // En Android usamos AndroidSettings con foregroundNotificationConfig
+      // para que el GPS siga corriendo en segundo plano sin que el SO
+      // mate la app. El user ve una notif "La 10 — en linea" persistente.
+      // En iOS/web caemos al LocationSettings basico.
+      final settings = Platform.isAndroid
+          ? AndroidSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 10,
+              foregroundNotificationConfig: const ForegroundNotificationConfig(
+                notificationTitle: 'La 10 — en línea',
+                notificationText: 'Estás recibiendo ofertas. Tu ubicación se comparte.',
+                enableWakeLock: true,
+                setOngoing: true,
+              ),
+            )
+          : const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 10,
+            );
+
+      _sub = Geolocator.getPositionStream(locationSettings: settings)
+          .listen(_onPosition, onError: (Object e) {
+        if (mounted) setState(() => _error = '$e');
       });
 
-      setState(() {
-        _on = true;
-        _starting = false;
-      });
+      if (mounted) {
+        setState(() {
+          _on = true;
+          _starting = false;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _on = false;
-        _starting = false;
-        _error = '$e';
-      });
+      if (mounted) {
+        setState(() {
+          _on = false;
+          _starting = false;
+          _error = '$e';
+        });
+      }
     }
   }
 
@@ -128,6 +162,15 @@ class _RiderGpsTrackerState extends ConsumerState<RiderGpsTracker> {
 
   @override
   Widget build(BuildContext context) {
+    // Cada vez que rebuild, sincronizamos el tracker con el estado del
+    // rider. Si el rider esta available y el tracker no esta corriendo,
+    // arranca. Si el rider se pauso, lo apagamos.
+    final rider = ref.watch(myRiderProvider).value;
+    final status = rider?.status;
+    // postFrame para no llamar setState durante build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncWithRiderStatus(status);
+    });
     final cs = Theme.of(context).colorScheme;
     return Card(
       child: Padding(
@@ -141,7 +184,7 @@ class _RiderGpsTrackerState extends ConsumerState<RiderGpsTracker> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    _on ? 'GPS automático: encendido' : 'GPS automático: apagado',
+                    _on ? 'Ubicación compartiéndose' : 'Ubicación: detenida',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
@@ -150,10 +193,15 @@ class _RiderGpsTrackerState extends ConsumerState<RiderGpsTracker> {
                     height: 18,
                     width: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else
-                  Switch(value: _on, onChanged: _toggle),
+                  ),
               ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _on
+                  ? 'Sigue activa con la app cerrada o el celu bloqueado.'
+                  : 'Se activa sola cuando tocás "Estoy en línea".',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             if (_last != null) ...[
               const SizedBox(height: 8),
