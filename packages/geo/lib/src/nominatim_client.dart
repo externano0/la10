@@ -23,17 +23,31 @@ class NominatimHit {
     required this.displayName,
     required this.lat,
     required this.lng,
+    this.hasHouseNumber = false,
+    this.placeRank = 0,
   });
 
-  factory NominatimHit.fromJson(Map<String, dynamic> j) => NominatimHit(
-        displayName: j['display_name'] as String? ?? '',
-        lat: double.tryParse('${j['lat']}') ?? 0,
-        lng: double.tryParse('${j['lon']}') ?? 0,
-      );
+  factory NominatimHit.fromJson(Map<String, dynamic> j) {
+    final address = j['address'] as Map<String, dynamic>?;
+    return NominatimHit(
+      displayName: j['display_name'] as String? ?? '',
+      lat: double.tryParse('${j['lat']}') ?? 0,
+      lng: double.tryParse('${j['lon']}') ?? 0,
+      // Nominatim devuelve `house_number` solo cuando matcheo el numero
+      // especifico. Si no esta = solo matcheo la calle = el lat/lng es
+      // un centroide aproximado (a veces hasta 2 cuadras off).
+      hasHouseNumber: address != null && address['house_number'] != null,
+      // place_rank mas alto = mas especifico (10 = country, 30 = building).
+      // Usamos esto como tiebreaker cuando varios resultados matchean.
+      placeRank: (j['place_rank'] as num?)?.toInt() ?? 0,
+    );
+  }
 
   final String displayName;
   final double lat;
   final double lng;
+  final bool hasHouseNumber;
+  final int placeRank;
 
   LatLng get point => LatLng(lat, lng);
 }
@@ -50,18 +64,36 @@ class NominatimClient {
   Future<List<NominatimHit>> search(String query, {int limit = 5}) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
+    // Pedimos addressdetails=1 para poder ver si cada hit incluye
+    // house_number → asi priorizamos los que matchearon el numero
+    // exacto sobre los que solo matchearon la calle.
+    // Pedimos el doble de hits que mostramos al user para tener margen
+    // de re-sort: tomamos los top N con house_number primero.
+    final fetchLimit = (limit * 2).clamp(5, 20);
     final uri = Uri.parse('$baseUrl/search').replace(queryParameters: {
       'q': q,
       'format': 'jsonv2',
-      'limit': '$limit',
+      'limit': '$fetchLimit',
       'countrycodes': countryCodes,
-      'addressdetails': '0',
+      'addressdetails': '1',
     });
     try {
       final res = await _client.get(uri);
       if (res.statusCode != 200) return const [];
       final list = jsonDecode(res.body) as List<dynamic>;
-      return list.map((e) => NominatimHit.fromJson(e as Map<String, dynamic>)).toList();
+      final hits = list
+          .map((e) => NominatimHit.fromJson(e as Map<String, dynamic>))
+          .toList();
+      // Sort: hits con house_number primero, despues por placeRank desc.
+      // Esto sube el resultado exacto (la casa especifica) por encima
+      // de la calle "Juarez Celman" sin numero que viene como centroide.
+      hits.sort((a, b) {
+        if (a.hasHouseNumber != b.hasHouseNumber) {
+          return a.hasHouseNumber ? -1 : 1;
+        }
+        return b.placeRank.compareTo(a.placeRank);
+      });
+      return hits.take(limit).toList();
     } catch (_) {
       return const [];
     }

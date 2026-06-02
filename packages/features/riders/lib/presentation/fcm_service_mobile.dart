@@ -31,6 +31,11 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:la10_data/la10_data.dart';
 
+/// Pending order_id que vino de un accept de callkit que ocurrió antes
+/// de que el navegador estuviese listo. Lo procesamos en cuanto el app
+/// inyecta el navigator via [setFcmNavigator].
+String? _pendingNavOrderId;
+
 bool _firebaseReady = false;
 
 /// Canal Android — `channel_id` debe matchear lo que manda send-push.
@@ -55,6 +60,16 @@ void Function(String path)? _navigate;
 
 void setFcmNavigator(void Function(String path) navigate) {
   _navigate = navigate;
+  // Si el callkit accept disparó antes de que el navegador esté listo
+  // (caso app matada → callkit launches MainActivity → boot toma 1-2s →
+  // accept event llega antes que el listener), drenamos el pending acá.
+  final pending = _pendingNavOrderId;
+  if (pending != null) {
+    _pendingNavOrderId = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      navigate('/r/orders/$pending');
+    });
+  }
 }
 
 Future<void> initFcm() async {
@@ -173,18 +188,42 @@ Future<void> _maybeShowOfferCall(RemoteMessage message) async {
   await FlutterCallkitIncoming.showCallkitIncoming(params);
 }
 
-void _onCallkitEvent(CallEvent? event) {
+Future<void> _onCallkitEvent(CallEvent? event) async {
   if (event == null) return;
+  final extra = event.body['extra'] as Map?;
+  final offerId = extra?['offer_id']?.toString() ?? '';
+  final orderId = extra?['order_id']?.toString() ?? '';
   switch (event.event) {
     case Event.actionCallAccept:
-      // El rider acepto desde el popup. Navegamos a la pantalla de
-      // ofertas para mostrar detalles + confirmar el take.
-      _navigate?.call('/r/offers');
+      // El rider acepto desde el popup. Hacemos dos cosas:
+      // 1. POST al backend respond('accepted') para marcar la offer.
+      // 2. Navegar al detalle del pedido /r/orders/{orderId} con toda
+      //    la info (mapa, direcciones, monto, botones de cambio de
+      //    estado). Esa es la pantalla principal del rider mientras
+      //    lleva el pedido.
+      if (offerId.isNotEmpty) {
+        try {
+          await OffersRepository.instance.respond(offerId, 'accepted');
+        } catch (_) {
+          // No rompe el flow — si la API falla el rider lo vera en /r/offers.
+        }
+      }
+      if (orderId.isNotEmpty) {
+        if (_navigate != null) {
+          _navigate!('/r/orders/$orderId');
+        } else {
+          // App todavia esta booteando (caso "fue lanzada por el callkit
+          // accept"). Guardamos pendiente — setFcmNavigator lo dispara.
+          _pendingNavOrderId = orderId;
+        }
+      }
       break;
     case Event.actionCallDecline:
-      // Rechazo desde el popup: por ahora solo cerramos. Podriamos
-      // POSTear a la API el decline para que dispatch lo reasigne mas
-      // rapido sin esperar el timeout.
+      if (offerId.isNotEmpty) {
+        try {
+          await OffersRepository.instance.respond(offerId, 'declined');
+        } catch (_) {/* idem */}
+      }
       break;
     case Event.actionCallTimeout:
     case Event.actionCallEnded:

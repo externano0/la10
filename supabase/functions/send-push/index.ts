@@ -4,13 +4,14 @@
 // está en FIREBASE_SERVICE_ACCOUNT_JSON (env secret) — sin esa key nadie
 // puede firmar el JWT que valida FCM.
 //
-// v0.1.13: payload HIBRIDO (notification + data). El campo `notification`
-// es lo que garantiza que el SO Android muestra heads-up incluso si la
-// app fue matada por el battery saver (caso ZTE/Samsung/MIUI con celu
-// bloqueado). El campo `data` lleva `type=offer` + `order_id` para el
-// tap handler. Antes intentamos data-only para mostrar fullScreenIntent
-// custom desde el cliente, pero el bg isolate no arrancaba con la app
-// matada → no llegaba nada.
+// v0.1.15: payload DATA-ONLY (sin `notification`). Esto evita que el SO
+// muestre su heads-up estilo "mensaje" — el cliente (flutter_callkit_incoming)
+// es el unico que muestra UI. Asi siempre aparece el popup tipo llamada
+// full-screen, nunca la notif tipo SMS.
+// Tradeoff: con app matada en OEMs muy agresivos (MIUI extreme power
+// saver) el bg handler podria no arrancar → no se muestra nada. Lo
+// mitigamos con priority=HIGH + el foreground service del plugin
+// callkit que mantiene viva la conexion.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { create, getNumericDate } from 'https://deno.land/x/djwt@v3.0.2/mod.ts';
@@ -72,7 +73,7 @@ Deno.serve(async (req: Request) => {
 
     const sb = createClient(url, service);
     const { user_id, title, body, data } = await req.json();
-    if (!user_id || !title) return json({ error: 'user_id, title required' }, 400);
+    if (!user_id) return json({ error: 'user_id required' }, 400);
 
     const { data: tokens, error } = await sb.from('fcm_tokens')
       .select('token, platform').eq('user_id', user_id);
@@ -87,51 +88,42 @@ Deno.serve(async (req: Request) => {
     let sent = 0;
     const errors: unknown[] = [];
     for (const row of tokens) {
-      // HIBRIDO: notification (display garantizado por el SO incluso con
-      // app matada o celu bloqueado) + data (type + order_id para tap).
-      // El canal `la10_offers_call` esta creado en el cliente con MAX
-      // importance + vibrationPattern de llamada + LED rojo. El SO usa
-      // esos flags al renderizar la heads-up.
+      // DATA-ONLY: NO mandamos campo `notification`. El SO no muestra
+      // heads-up — el cliente (flutter_callkit_incoming) es el unico
+      // responsable de la UI. Asi nunca aparece la notif estilo SMS.
+      // Incluimos title/body adentro de `data` por si el cliente los
+      // necesita renderear adentro del popup.
       const payload = {
         message: {
           token: row.token,
-          notification: { title, body: body ?? '' },
           data: Object.fromEntries(
-            Object.entries({ title, body: body ?? '', ...(data ?? {}) })
-              .map(([k, v]) => [k, String(v)]),
+            Object.entries({
+              title: title ?? '',
+              body: body ?? '',
+              ...(data ?? {}),
+            }).map(([k, v]) => [k, String(v)]),
           ),
           android: {
-            // HIGH despierta el celu aunque esté bloqueado / en Doze.
+            // HIGH despierta el celu aunque esté bloqueado / en Doze y es
+            // requerido para que el bg handler de FCM se dispare en
+            // data-only mode.
             priority: 'HIGH',
-            // Sobreescribe ofertas viejas: solo una heads-up por rider.
             collapse_key: 'offer',
-            notification: {
-              channel_id: 'la10_offers_call',
-              sound: 'default',
-              visibility: 'PUBLIC',
-              notification_priority: 'PRIORITY_MAX',
-              // tag controla que una oferta nueva pise la anterior. El
-              // collapse_key arriba es de transporte; tag es del display.
-              tag: 'offer',
-              // No mandamos default_vibrate_timings porque el canal ya
-              // define un pattern custom de "llamada" (1s vibra/0.5s pausa
-              // x3). Si lo dejaramos true, el SO usaria el default y
-              // pisaria nuestro pattern.
-              default_vibrate_timings: false,
-              default_light_settings: false,
-            },
+            // NO ponemos `android.notification` porque eso forzaria al
+            // SO a renderizar heads-up — lo cual es justo lo que queremos
+            // evitar (queremos solo el popup tipo llamada del cliente).
           },
           apns: {
             payload: {
               aps: {
-                sound: 'default',
+                // content-available=1 + sin alert = silent push en iOS.
+                // Permite que el cliente reciba el data y muestre callkit.
                 'content-available': 1,
-                'interruption-level': 'time-sensitive',
               },
             },
             headers: {
-              'apns-priority': '10',
-              'apns-push-type': 'alert',
+              'apns-priority': '5',
+              'apns-push-type': 'background',
             },
           },
         },
