@@ -12,6 +12,8 @@ import 'package:la10_geo/la10_geo.dart' as geo;
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'rider_home.dart' show myActiveOrderProvider;
+
 final activeOrderProvider =
     FutureProvider.family<OrderRow?, String>((ref, id) async {
   return OrdersRepository.instance.getById(id);
@@ -52,9 +54,24 @@ class RiderActiveOrder extends ConsumerWidget {
         error: (e, _) => Center(child: Text('Error: $e')),
         data: (o) {
           if (o == null) return const Center(child: Text('No encontrada'));
-          return _OrderView(order: o, onChange: () {
-            ref.invalidate(activeOrderProvider(orderId));
-          });
+          return _OrderView(
+            order: o,
+            onChange: () {
+              ref.invalidate(activeOrderProvider(orderId));
+              // El card "Pedido activo" del home lee este stream.
+              // Forzamos refresh para que cuando el rider vuelva al home
+              // despues de un delivered/cancelled no vea el card viejo
+              // por el segundo que tarda el realtime en propagar.
+              ref.invalidate(myActiveOrderProvider);
+            },
+            onFinished: () {
+              // Despues de delivered/cancelled volvemos automaticamente al
+              // home — el pedido ya no esta activo, no tiene sentido seguir
+              // en la pantalla de detalle.
+              ref.invalidate(myActiveOrderProvider);
+              context.go('/r/home');
+            },
+          );
         },
       ),
     );
@@ -62,9 +79,16 @@ class RiderActiveOrder extends ConsumerWidget {
 }
 
 class _OrderView extends StatelessWidget {
-  const _OrderView({required this.order, required this.onChange});
+  const _OrderView({
+    required this.order,
+    required this.onChange,
+    required this.onFinished,
+  });
   final OrderRow order;
   final VoidCallback onChange;
+  // Se dispara cuando el rider termino el pedido (delivered o cancelled)
+  // — el RiderActiveOrder lo usa para navegar de vuelta a /r/home.
+  final VoidCallback onFinished;
 
   bool get _hasPickup => order.pickupLat != null && order.pickupLng != null;
   bool get _hasDropoff => order.dropoffLat != null && order.dropoffLng != null;
@@ -80,10 +104,25 @@ class _OrderView extends StatelessWidget {
     try {
       await OrdersRepository.instance.transition(order.id, to);
       onChange();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Estado actualizado: $to')),
-        );
+      // Si el rider llego a un estado terminal (entregado o cancelado)
+      // el pedido ya no es "activo" — volvemos al home y refrescamos el
+      // stream para que el card amarillo desaparezca sin esperar al
+      // realtime tick.
+      if (to == 'delivered' || to == 'cancelled') {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(
+              to == 'delivered' ? 'Pedido entregado ✅' : 'Pedido cancelado',
+            )),
+          );
+        }
+        onFinished();
+      } else {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Estado actualizado: $to')),
+          );
+        }
       }
     } catch (e) {
       if (context.mounted) {

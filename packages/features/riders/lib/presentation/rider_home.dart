@@ -24,7 +24,13 @@ final myRiderProvider = FutureProvider<Rider?>((ref) async {
 /// "Continuar pedido" en rider_home — escotilla de emergencia para
 /// llegar a /r/orders/{id} cuando el callkit accept no logro navegar
 /// (caso OEM agresivo / cache de eventos perdido / etc).
-final _myActiveOrderProvider = StreamProvider<OrderRow?>((ref) async* {
+///
+/// Exportado (sin guion bajo) porque [RiderActiveOrder] lo invalida
+/// explicitamente despues de transicionar a delivered/cancelled — si no,
+/// el stream a veces se queda con la emision vieja por unos segundos
+/// hasta que el realtime propaga, y el card sigue mostrando el pedido
+/// que el rider ya termino.
+final myActiveOrderProvider = StreamProvider<OrderRow?>((ref) async* {
   final rider = await RidersRepository.instance.me();
   if (rider == null) {
     yield null;
@@ -205,7 +211,7 @@ class _ActiveOrderCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(_myActiveOrderProvider);
+    final async = ref.watch(myActiveOrderProvider);
     return async.when(
       loading: () => const SizedBox.shrink(),
       error: (_, __) => const SizedBox.shrink(),
