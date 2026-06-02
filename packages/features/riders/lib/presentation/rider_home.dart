@@ -16,6 +16,20 @@ final _fcmRegisteredProvider = FutureProvider<void>((ref) async {
   await registerFcmToken();
 });
 
+/// One-shot que corre al primer mount de RiderHome y resetea el status
+/// del rider a `paused` si quedó `available` de la sesion anterior. El
+/// user no quiere "estar en linea" automatico al reabrir la app — tiene
+/// que tocar el boton "Estoy en linea" cada vez. Esto evita que reciba
+/// ofertas sin querer si la app se queda abierta del dia anterior.
+final _resetStatusOnLaunchProvider = FutureProvider<void>((ref) async {
+  final rider = await RidersRepository.instance.me();
+  if (rider == null) return;
+  if (rider.status == 'available') {
+    await RidersRepository.instance.updateStatus('paused');
+    ref.invalidate(myRiderProvider);
+  }
+});
+
 final myRiderProvider = FutureProvider<Rider?>((ref) async {
   return RidersRepository.instance.me();
 });
@@ -48,6 +62,10 @@ class RiderHome extends ConsumerWidget {
     // Dispara el registro del token FCM la primera vez que se renderiza
     // el home del rider. Si falla (sin red, sin permisos) no rompe la UI.
     ref.watch(_fcmRegisteredProvider);
+    // Resetea status='available' → 'paused' al primer mount. El user
+    // tiene que tocar "Estoy en linea" explicitamente cada vez que abre
+    // la app.
+    ref.watch(_resetStatusOnLaunchProvider);
     return OfferAlertGuard(
       child: _buildScaffold(context, ref, me),
     );

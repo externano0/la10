@@ -25,6 +25,7 @@ import 'dart:typed_data' show Int64List;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/services.dart' show DartPluginRegistrant;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
@@ -151,8 +152,16 @@ Future<void> _ensureChannel() async {
 /// background o cerrada. Si el `data` indica oferta, abrimos el popup
 /// full-screen tipo llamada via flutter_callkit_incoming. El plugin
 /// maneja foreground service + Activity con showWhenLocked.
+///
+/// CRITICO: DartPluginRegistrant.ensureInitialized() — sin esta linea
+/// los plugins (callkit, supabase, etc) no tienen sus MethodChannels
+/// registrados en este isolate. Resultado: showCallkitIncoming falla
+/// silenciosamente con app matada. Es el motivo por el cual el popup
+/// "anda solo la primera vez" — funcionaba en foreground pero no
+/// despues de cerrar la app.
 @pragma('vm:entry-point')
 Future<void> _fcmBackgroundHandler(RemoteMessage message) async {
+  DartPluginRegistrant.ensureInitialized();
   await Firebase.initializeApp();
   await _ensureChannel();
   await _maybeShowOfferCall(message);
