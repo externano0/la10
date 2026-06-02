@@ -231,9 +231,22 @@ Future<void> _maybeShowOfferCall(RemoteMessage message) async {
 
 Future<void> _onCallkitEvent(CallEvent? event) async {
   if (event == null) return;
+  // El plugin envia el body con `extra` (el Map que pasamos a CallKitParams)
+  // y con `id` (el field id del CallKitParams). Nosotros seteamos `id`
+  // = orderId, asi que si por algun motivo el extra no deserializa bien
+  // (HashMap Bundle → MethodChannel a veces se pierde en Android 13+),
+  // tenemos el orderId via el id de la call como fallback confiable.
   final extra = event.body['extra'] as Map?;
   final offerId = extra?['offer_id']?.toString() ?? '';
-  final orderId = extra?['order_id']?.toString() ?? '';
+  String orderId = extra?['order_id']?.toString() ?? '';
+  if (orderId.isEmpty) {
+    final id = event.body['id']?.toString() ?? '';
+    // Filtramos el caso del id auto-generado por timestamp (cuando el push
+    // no traia orderId — escenario edge, no deberia pasar en prod).
+    if (id.isNotEmpty && int.tryParse(id) == null) {
+      orderId = id;
+    }
+  }
   switch (event.event) {
     case Event.actionCallAccept:
       // El rider acepto desde el popup. Hacemos dos cosas:

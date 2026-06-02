@@ -120,6 +120,26 @@ class OrdersRepository {
         .map((rows) => rows.map((e) => OrderRow.fromJson(e)).toList());
   }
 
+  /// Stream del pedido activo del rider (assigned o picked_up) — para que
+  /// el rider_home muestre "Continuar pedido" aunque el callkit accept no
+  /// haya logrado navegar. Realtime: cualquier UPDATE al status se refleja.
+  /// Devuelve `null` cuando no hay pedido en curso.
+  Stream<OrderRow?> watchMyActive(String riderId) {
+    return La10Supabase.client.from('orders').stream(primaryKey: ['id'])
+        .eq('assigned_rider_id', riderId)
+        .map((rows) {
+      final active = rows.where((r) {
+        final s = r['status'] as String?;
+        return s == 'assigned' || s == 'picked_up';
+      }).toList();
+      if (active.isEmpty) return null;
+      // Si por algun motivo hay mas de uno, agarramos el mas reciente.
+      active.sort((a, b) =>
+          (b['created_at'] as String).compareTo(a['created_at'] as String));
+      return OrderRow.fromJson(active.first);
+    });
+  }
+
   Future<List<Map<String, dynamic>>> eventsFor(String orderId) async {
     final res = await La10Supabase.client.from('order_events').select().eq('order_id', orderId).order('created_at');
     return (res as List).cast<Map<String, dynamic>>();

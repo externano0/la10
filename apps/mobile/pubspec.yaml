@@ -1,7 +1,7 @@
 name: la10_mobile
 description: La 10 mobile (Android/iOS) — riders and business owners.
 publish_to: none
-version: 0.1.16
+version: 0.1.17
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

@@ -20,6 +20,19 @@ final myRiderProvider = FutureProvider<Rider?>((ref) async {
   return RidersRepository.instance.me();
 });
 
+/// Stream del pedido activo del rider. Se usa para renderear el card
+/// "Continuar pedido" en rider_home — escotilla de emergencia para
+/// llegar a /r/orders/{id} cuando el callkit accept no logro navegar
+/// (caso OEM agresivo / cache de eventos perdido / etc).
+final _myActiveOrderProvider = StreamProvider<OrderRow?>((ref) async* {
+  final rider = await RidersRepository.instance.me();
+  if (rider == null) {
+    yield null;
+    return;
+  }
+  yield* OrdersRepository.instance.watchMyActive(rider.riderId);
+});
+
 class RiderHome extends ConsumerWidget {
   const RiderHome({super.key});
 
@@ -101,6 +114,11 @@ class RiderHome extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Card de "Continuar pedido activo" — solo aparece si el
+                // rider tiene una orden asignada o picked_up. Es el fallback
+                // visible para llegar al detalle del pedido si por algun
+                // motivo el callkit accept no logro navegar.
+                const _ActiveOrderCard(),
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -174,6 +192,85 @@ class RiderHome extends ConsumerWidget {
           );
         },
       ),
+    );
+  }
+}
+
+/// Card prominente que aparece arriba de todo cuando el rider tiene
+/// una orden activa (assigned o picked_up). Muestra direccion + monto
+/// y un boton grande "Abrir pedido" que va a /r/orders/{id}.
+/// Si no hay pedido activo, no renderiza nada (SizedBox.shrink).
+class _ActiveOrderCard extends ConsumerWidget {
+  const _ActiveOrderCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(_myActiveOrderProvider);
+    return async.when(
+      loading: () => const SizedBox.shrink(),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (order) {
+        if (order == null) return const SizedBox.shrink();
+        final money = order.totalAmountCents == null
+            ? null
+            : '\$${(order.totalAmountCents! / 100).toStringAsFixed(0)} ${order.currency ?? 'ARS'}';
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Card(
+            color: Colors.amber.shade50,
+            child: InkWell(
+              onTap: () => context.push('/r/orders/${order.id}'),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const CircleAvatar(
+                          backgroundColor: Colors.amber,
+                          child: Icon(Icons.local_shipping, color: Colors.white),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                order.status == 'assigned'
+                                    ? 'Pedido por retirar'
+                                    : 'Pedido en camino',
+                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                              if (money != null)
+                                Text(money, style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w600)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text('Retirar en: ${order.pickupAddress}'),
+                    Text('Entregar en: ${order.dropoffAddress}'),
+                    const SizedBox(height: 8),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(44),
+                        backgroundColor: Colors.amber.shade700,
+                      ),
+                      onPressed: () => context.push('/r/orders/${order.id}'),
+                      icon: const Icon(Icons.navigation),
+                      label: const Text('Abrir pedido', style: TextStyle(fontSize: 16)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
