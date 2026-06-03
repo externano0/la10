@@ -29,6 +29,10 @@ Future<void> main() async {
         await La10Supabase.auth.signOut().catchError((_) {});
       }
     }
+    // Listener realtime que dispara el callkit por websocket Supabase,
+    // sin pasar por FCM. Es el camino principal en ZTE/MIUI donde FCM
+    // no es confiable. FCM queda como fallback (mismo offer_id dedupea).
+    startOfferRealtimeListener();
     runApp(const ProviderScope(child: La10MobileApp()));
   } catch (e, st) {
     runApp(_BootErrorApp(error: '$e', stack: '$st'));
